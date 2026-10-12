@@ -111,6 +111,14 @@ function createBot(personaKey, index) {
     appendDiary(`${persona.name} が倒れました。`);
   });
 
+  bot.on('kicked', (reason) => {
+    console.log(`[${persona.name}] KICKされました:`, JSON.stringify(reason));
+  });
+
+  bot.on('end', (reason) => {
+    console.log(`[${persona.name}] 切断されました:`, reason);
+  });
+
   bot.on('error', (err) => {
     console.error(`[${persona.name}] エラー:`, err.message);
   });
@@ -170,5 +178,5 @@ personaKeys.forEach((key, idx) => {
   setTimeout(() => {
     const b = createBot(key, idx);
     activeBots.push(b);
-  }, idx * 4000); // 接続が重ならないよう4秒間隔で参加
+  }, idx * 6000); // 接続が重ならないよう6秒間隔で参加
 });
