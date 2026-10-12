@@ -36,11 +36,23 @@ public class RadarMapPlugin extends JavaPlugin implements Listener, CommandExecu
                 for (MapRenderer r : radarMapView.getRenderers()) {
                     radarMapView.removeRenderer(r);
                 }
-                // 自動縮尺レーダーレンダラーを追加
                 radarMapView.addRenderer(new RadarMapRenderer());
                 getLogger().info("Radar Map initialized successfully (Map ID: " + radarMapView.getId() + ")");
+                // 接続中の全プレイヤー・AI仲間へ即座に配布
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    giveRadarMap(p);
+                }
             }
-        }, 40L);
+        }, 10L);
+
+        // 未所持プレイヤーへの定期自動配布 (5秒ごと)
+        Bukkit.getScheduler().runTaskTimer(this, () -> {
+            if (radarMapView != null) {
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    giveRadarMap(p);
+                }
+            }
+        }, 40L, 100L);
 
         getServer().getPluginManager().registerEvents(this, this);
         if (getCommand("radar") != null) {
