@@ -8,7 +8,12 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const pvp = require('mineflayer-pvp').plugin;
 const autoEat = require('mineflayer-auto-eat').plugin;
 const collectBlock = require('mineflayer-collectblock').plugin;
-const { mineflayer: viewer } = require('prismarine-viewer');
+let viewer = null;
+try {
+  viewer = require('prismarine-viewer').mineflayer;
+} catch (e) {
+  console.warn(`[Viewer Warning] prismarine-viewerの読み込みをスキップしました (${e.message})。Bot本体の動作を継続します。`);
+}
 const fs = require('fs');
 const path = require('path');
 
@@ -102,11 +107,13 @@ function createBot(personaKey, index) {
     bot.pathfinder.setMovements(defaultMove);
 
     // 視線 (First-Person POV) Prismarine-Viewer 起動
-    try {
-      viewer(bot, { port: viewerPort, firstPerson: true });
-      console.log(`🎥 [${botName}] 一人称視点Webストリーム配信中 -> ポート ${viewerPort}`);
-    } catch (err) {
-      console.warn(`[${botName}] Viewer起動スキップ:`, err.message);
+    if (viewer) {
+      try {
+        viewer(bot, { port: viewerPort, firstPerson: true });
+        console.log(`🎥 [${botName}] 一人称視点Webストリーム配信中 -> ポート ${viewerPort}`);
+      } catch (err) {
+        console.warn(`[${botName}] Viewer起動スキップ:`, err.message);
+      }
     }
 
     // 初回挨拶（接続負荷を避けて順次発言）

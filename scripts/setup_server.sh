@@ -11,7 +11,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== [1/4] Java 21 JDK および必要パッケージのセットアップ ==="
 apt-get update -qq
-apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils zstd nodejs npm rsync > /dev/null 2>&1
+apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils zstd nodejs npm rsync build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev > /dev/null 2>&1
 echo "Javaバージョン:"
 java -version 2>&1 | head -n 1
 echo "Nodeバージョン:"

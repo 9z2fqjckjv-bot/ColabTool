@@ -103,9 +103,13 @@ echo ""
 # 6. Bot依存関係インストール & AIPlayerクラスタ起動
 echo ">> [6/7] AIPlayer群 (Gemini, ChatGPT, Claude, Grok) 起動中..."
 cd "$REPO_DIR/bot"
-if [ ! -d "node_modules/prismarine-viewer" ]; then
-    echo "Mineflayer Bot の依存関係をインストール中 (約30秒)..."
-    npm install --silent > /content/npm_install.log 2>&1 || npm install
+if [ ! -d "node_modules/canvas" ] || [ ! -d "node_modules/prismarine-viewer" ]; then
+    echo "Mineflayer Bot & Viewer (canvas) の依存関係をインストール中 (約30秒)..."
+    npm install --silent > /content/npm_install.log 2>&1 || npm install || true
+    if [ ! -d "node_modules/canvas" ]; then
+        echo "canvas の単体インストールを試行中..."
+        npm install canvas --no-save > /dev/null 2>&1 || true
+    fi
 fi
 pkill -f "node index.js" || true
 nohup node index.js > /content/bots.log 2>&1 &
