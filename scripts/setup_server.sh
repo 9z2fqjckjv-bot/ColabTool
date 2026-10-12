@@ -66,4 +66,11 @@ if [ ! -f "/usr/local/bin/playit" ]; then
 fi
 echo "playit.gg の準備完了"
 
+echo "=== [追加] 互換性プラグイン (ViaVersion) の導入 ==="
+mkdir -p "$SERVER_DIR/plugins"
+if [ ! -f "$SERVER_DIR/plugins/ViaVersion.jar" ]; then
+    echo "最新クライアント互換プラグイン (ViaVersion) をダウンロード中..."
+    curl -sL -o "$SERVER_DIR/plugins/ViaVersion.jar" "https://github.com/ViaVersion/ViaVersion/releases/download/5.12.1/ViaVersion-5.12.1.jar"
+fi
+
 echo "=== サーバーセットアップ完了 ==="
