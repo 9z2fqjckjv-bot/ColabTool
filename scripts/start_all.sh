@@ -1,7 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# start_all.sh - ワンクリック完全起動スクリプト (Colab堅牢化版)
-# (サーバー・トンネル・LLM・Bot・録画・バックアップ・動向監視)
+# start_all.sh - ワンクリック完全起動スクリプト (Colab堅牢化 & 接続アドレス追跡版)
 # ==============================================================================
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,8 +37,8 @@ if [ -z "$GEMINI_API_KEY" ]; then
     OLLAMA_HOST=0.0.0.0:8000 nohup ollama serve > /content/ollama.log 2>&1 &
     sleep 3
 
-    echo "日本語対応LLMモデル (qwen2.5:7b) をダウンロード中 (約4.5GB、1〜2分)..."
-    ollama pull qwen2.5:7b || echo "モデルロードを再試行します..."
+    echo "日本語対応LLMモデル (qwen2.5:7b) をロード中..."
+    ollama pull qwen2.5:7b > /dev/null 2>&1 || true
 
     export LLM_API_URL="http://localhost:8000/v1/chat/completions"
     export LLM_MODEL="qwen2.5:7b"
@@ -47,43 +46,68 @@ else
     echo "Google AI Studio (Gemini 1.5 Free Tier) を使用します。"
 fi
 
-# 4. Minecraft サーバー起動 (Named Pipeによる安全なCUI入出力)
+# 4. Minecraft サーバー起動
 echo ">> [4/7] Minecraftサーバー (PaperMC) 起動中..."
 cd "$SERVER_DIR"
-
-# 入力パイプ作成 (コマンド配信用)
-PIPE_PATH="$SERVER_DIR/server.pipe"
-rm -f "$PIPE_PATH"
-mkfifo "$PIPE_PATH" 2>/dev/null || true
+pkill -f "server.jar" || true
 
 # サーバー起動 (nohupバックグラウンド)
-tail -f "$PIPE_PATH" 2>/dev/null | java -Xms8G -Xmx12G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/console.log" 2>&1 &
+nohup java -Xms8G -Xmx12G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
 MC_PID=$!
 echo "$MC_PID" > /content/mc_server.pid
 
-# サーバー起動完了待ち
-echo "サーバーの起動完了を待機中 (約30秒)..."
-for i in {1..30}; do
-    if grep -q "Done" "$SERVER_DIR/logs/latest.log" 2>/dev/null || grep -q "Done" "$SERVER_DIR/logs/console.log" 2>/dev/null; then
+# サーバー起動完了待ち (最大90秒)
+echo "サーバーの起動完了を待機中..."
+STARTED=false
+for i in {1..45}; do
+    if grep -q "Done (" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
+        STARTED=true
+        break
+    fi
+    if ! kill -0 "$MC_PID" 2>/dev/null; then
+        echo "⚠️ サーバーが予期せず停止しました。ログを確認します:"
+        tail -n 30 "$SERVER_DIR/logs/latest.log" 2>/dev/null
         break
     fi
     sleep 2
+    echo -n "."
 done
-echo "✅ Minecraftサーバーが正常に起動しました！"
+echo ""
+
+if [ "$STARTED" = true ]; then
+    echo "✅ Minecraftサーバーが正常に起動しました！(ポート: 25565)"
+else
+    echo "⚠️ 起動確認がタイムアウトしましたが、プロセスは継続しています。"
+fi
 
 # 5. playit.gg トンネル起動
 echo ">> [5/7] playit.gg トンネル接続中..."
 pkill -f "playit" || true
 nohup playit --stdout > /content/playit.log 2>&1 &
-sleep 5
+sleep 6
 
 echo ""
 echo "=================================================="
 echo "★ Minecraft 接続先アドレスの確認 ★"
-echo "playit.gg の接続ステータス:"
-grep -E "claim|tunnel|connect|setup at|https://" /content/playit.log 2>/dev/null || cat /content/playit.log | head -n 10
-echo "--------------------------------------------------"
-echo "手元のJava版Minecraftクライアントから上記アドレスで接続してください。"
+echo "=================================================="
+
+# playit.log の内容を解析
+CLAIM_URL=$(grep -oE "https://playit\.gg/claim/[a-zA-Z0-9]+" /content/playit.log 2>/dev/null | head -n 1)
+
+if [ -n "$CLAIM_URL" ]; then
+    echo "【重要: 初回設定リンク】"
+    echo "ブラウザで以下のURLを開き、「Add Tunnel (Minecraft Java)」をクリックしてください:"
+    echo "👉 $CLAIM_URL"
+    echo "--------------------------------------------------"
+    echo "登録が完了すると、専用の接続アドレス (例: xxxx.gl.joinmc.link) が発行されます。"
+fi
+
+# すでに登録済みトンネルがあるか確認
+TUNNEL_ADDR=$(grep -oE "[a-zA-Z0-9\.\-]+\.(gl\.joinmc\.link|auto\.playit\.gg|playit\.gg):?[0-9]*" /content/playit.log 2>/dev/null | tail -n 1)
+if [ -n "$TUNNEL_ADDR" ]; then
+    echo "🎉 発行済み接続アドレス:"
+    echo "👉 $TUNNEL_ADDR"
+fi
 echo "=================================================="
 echo ""
 
@@ -119,5 +143,4 @@ echo ""
 ) &
 
 # サーバーコンソールログをリアルタイム監視・出力
-touch "$SERVER_DIR/logs/latest.log"
 tail -f "$SERVER_DIR/logs/latest.log"
