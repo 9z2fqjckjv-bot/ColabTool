@@ -36,14 +36,28 @@ else
 fi
 echo "✅ RadarMap.jar の配置完了！"
 
-# 3. サーバーへプラグインを即時ロード & 全員へ配布
-echo ">> [2/4] Minecraftサーバーへプラグインを反映中..."
+# 3. サーバーのクリーン再起動 (ViaVersionのクラスローダー競合・LinkageErrorを完全防止)
+echo ">> [2/4] Minecraftサーバーを安全に再起動中 (約8秒)..."
 if [ -p "$PIPE_PATH" ]; then
-    echo "reload confirm" > "$PIPE_PATH" 2>/dev/null || true
-    sleep 3
-    echo "say §a[System] §f自動縮尺レーダー地図システムが更新されました。" > "$PIPE_PATH" 2>/dev/null || true
-    echo "radar" > "$PIPE_PATH" 2>/dev/null || true
+    echo "stop" > "$PIPE_PATH" 2>/dev/null || true
 fi
+pkill -TERM -f "server.jar" 2>/dev/null || true
+while pgrep -f "server.jar" > /dev/null 2>&1; do
+    sleep 1
+done
+
+cd "$SERVER_DIR"
+rm -f "$PIPE_PATH" && mkfifo "$PIPE_PATH"
+nohup tail -f "$PIPE_PATH" | java -Xms8G -Xmx12G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
+echo $! > /content/mc_server.pid
+
+for i in {1..30}; do
+    if grep -q "Done (" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+echo "✅ Minecraftサーバー再起動完了！"
 
 # 4. LLMエンジンの起動確認 & 高速モデル準備
 echo ">> [3/4] LLM推論エンジンの稼働確認..."
