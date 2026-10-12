@@ -26,18 +26,15 @@ else
     fi
 fi
 
-# 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) のコンパイル & 配置
-echo ">> [1/4] レーダー地図プラグインをコンパイル中..."
-BUILD_DIR="/tmp/radarmap_live_build"
-rm -rf "$BUILD_DIR"
-mkdir -p "$BUILD_DIR/classes"
-
-javac -cp "$SERVER_DIR/server.jar" -d "$BUILD_DIR/classes" \
-    "$REPO_DIR/plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/"*.java
-cp "$REPO_DIR/plugins_src/RadarMap/src/main/resources/plugin.yml" "$BUILD_DIR/classes/"
-jar -cf "$SERVER_DIR/plugins/RadarMap.jar" -C "$BUILD_DIR/classes" .
-rm -rf "$BUILD_DIR"
-echo "✅ RadarMap.jar のビルド完了！"
+# 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) の配置
+echo ">> [1/4] レーダー地図プラグインを配置中..."
+mkdir -p "$SERVER_DIR/plugins"
+if [ -f "$REPO_DIR/plugins/RadarMap.jar" ]; then
+    cp -f "$REPO_DIR/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+else
+    curl -sL -o "$SERVER_DIR/plugins/RadarMap.jar" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/plugins/RadarMap.jar" || true
+fi
+echo "✅ RadarMap.jar の配置完了！"
 
 # 3. サーバーへプラグインを即時ロード & 全員へ配布
 echo ">> [2/4] Minecraftサーバーへプラグインを反映中..."

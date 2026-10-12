@@ -132,7 +132,7 @@ public class RadarMapRenderer extends MapRenderer {
             byte cursorX = (byte) ((mapX - 64) * 2);
             byte cursorY = (byte) ((mapY - 64) * 2);
             byte cursorDir = (byte) Math.floorMod((int) (pLoc.getYaw() * 16.0 / 360.0), 16);
-            MapCursor.Type cType = p.equals(viewer) ? MapCursor.Type.WHITE_POINTER : MapCursor.Type.BLUE_POINTER;
+            MapCursor.Type cType = p.equals(viewer) ? MapCursor.Type.PLAYER : MapCursor.Type.BLUE_MARKER;
             cursors.addCursor(new MapCursor(cursorX, cursorY, cursorDir, cType, true));
         }
     }

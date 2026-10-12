@@ -74,18 +74,14 @@ if [ ! -f "$SERVER_DIR/plugins/ViaVersion.jar" ]; then
     curl -sL -o "$SERVER_DIR/plugins/ViaVersion.jar" "https://github.com/ViaVersion/ViaVersion/releases/download/5.12.1/ViaVersion-5.12.1.jar" || true
 fi
 
-echo "=== [追加2] 自動縮尺レーダー地図プラグイン (RadarMap) のビルド ==="
-if [ -d "$REPO_DIR/plugins_src/RadarMap" ]; then
-    echo "RadarMap プラグインをコンパイル中..."
-    BUILD_DIR="/tmp/radarmap_build"
-    rm -rf "$BUILD_DIR"
-    mkdir -p "$BUILD_DIR/classes"
-    javac -cp "$SERVER_DIR/server.jar" -d "$BUILD_DIR/classes" \
-        "$REPO_DIR/plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/"*.java
-    cp "$REPO_DIR/plugins_src/RadarMap/src/main/resources/plugin.yml" "$BUILD_DIR/classes/"
-    jar -cf "$SERVER_DIR/plugins/RadarMap.jar" -C "$BUILD_DIR/classes" .
-    rm -rf "$BUILD_DIR"
-    echo "✅ RadarMap.jar のビルド完了！"
+echo "=== [追加2] 自動縮尺レーダー地図プラグイン (RadarMap) の導入 ==="
+mkdir -p "$SERVER_DIR/plugins"
+if [ -f "$REPO_DIR/plugins/RadarMap.jar" ]; then
+    cp -f "$REPO_DIR/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+    echo "✅ RadarMap.jar の導入完了！"
+elif [ -f "/tmp/ColabTool_fetch/plugins/RadarMap.jar" ]; then
+    cp -f "/tmp/ColabTool_fetch/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+    echo "✅ RadarMap.jar の導入完了！"
 fi
 
 echo "=== サーバーセットアップ完了 ==="

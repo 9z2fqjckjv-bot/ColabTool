@@ -32,6 +32,12 @@ for rel in file_rel_paths:
 
 embedded_json_str = json.dumps(embedded_files, ensure_ascii=False)
 
+embedded_binaries = {}
+if (repo_dir / 'plugins/RadarMap.jar').exists():
+    import base64
+    embedded_binaries['plugins/RadarMap.jar'] = base64.b64encode((repo_dir / 'plugins/RadarMap.jar').read_bytes()).decode('ascii')
+embedded_bin_str = json.dumps(embedded_binaries)
+
 nb = {
  "cells": [
   {
@@ -74,6 +80,7 @@ nb = {
     "import os\n",
     "import sys\n",
     "import json\n",
+    "import base64\n",
     "import subprocess\n",
     "import time\n",
     "\n",
@@ -97,12 +104,19 @@ nb = {
     "os.makedirs(REPO_PATH, exist_ok=True)\n",
     "\n",
     f"EMBEDDED_FILES = {embedded_json_str}\n",
+    f"EMBEDDED_BINARIES = {embedded_bin_str}\n",
     "\n",
     "for file_path, content in EMBEDDED_FILES.items():\n",
     "    full_path = os.path.join(REPO_PATH, file_path)\n",
     "    os.makedirs(os.path.dirname(full_path), exist_ok=True)\n",
     "    with open(full_path, \"w\", encoding=\"utf-8\") as f:\n",
     "        f.write(content)\n",
+    "\n",
+    "for file_path, b64_str in EMBEDDED_BINARIES.items():\n",
+    "    full_path = os.path.join(REPO_PATH, file_path)\n",
+    "    os.makedirs(os.path.dirname(full_path), exist_ok=True)\n",
+    "    with open(full_path, \"wb\") as f:\n",
+    "        f.write(base64.b64decode(b64_str))\n",
     "\n",
     "print(\"✅ 最新スクリプト・プラグイン一式を /content/ColabTool に展開完了。\")\n",
     "\n",
