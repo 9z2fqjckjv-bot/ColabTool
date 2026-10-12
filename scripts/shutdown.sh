@@ -26,16 +26,15 @@ pkill -f "node index.js" || true
 
 # 3. Minecraft サーバーへの save-all & stop
 echo ">> [3/5] Minecraftワールドを保存して停止中..."
-if [ -p "$PIPE_PATH" ]; then
-    echo "say サーバーを安全にシャットダウンします..." > "$PIPE_PATH" 2>/dev/null || true
-    sleep 1
-    echo "save-all" > "$PIPE_PATH" 2>/dev/null || true
-    sleep 3
-    echo "stop" > "$PIPE_PATH" 2>/dev/null || true
-    sleep 8
-fi
-pkill -f "server.jar" || true
-rm -f "$PIPE_PATH"
+pkill -TERM -f "server.jar" || true
+
+# Javaプロセスがワールドの保存を完了して完全に終了するまで待機
+while pgrep -f "server.jar" > /dev/null; do
+    echo "ワールドデータを保存中... お待ちください"
+    sleep 2
+done
+echo "✅ ワールドデータの保存とサーバー停止が完了しました。"
+rm -f "$PIPE_PATH" /content/mc_server.pid
 
 # 4. playit.gg の停止
 pkill -f "playit" || true
