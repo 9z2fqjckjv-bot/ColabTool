@@ -1,10 +1,11 @@
 #!/bin/bash
 # ==============================================================================
-# shutdown.sh - 安全な停止・バックアップ・Git自動プッシュ
+# shutdown.sh - 安全な停止・バックアップ・Git自動プッシュ (堅牢化版)
 # ==============================================================================
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_DIR="/content/minecraft_server"
+PIPE_PATH="$SERVER_DIR/server.pipe"
 
 echo "=================================================="
 echo "    Minecraft AI Colab Server - 安全なシャットダウン"
@@ -16,23 +17,28 @@ if [ -f "/content/recorder_pids.txt" ]; then
     kill $(cat /content/recorder_pids.txt) 2>/dev/null || true
     rm -f /content/recorder_pids.txt
 fi
+pkill -f "ffmpeg" || true
+pkill -f "Xvfb" || true
 
 # 2. AIPlayer ボットの停止
 echo ">> [2/5] AIPlayer をログアウト中..."
-screen -S bots -X quit 2>/dev/null || true
+pkill -f "node index.js" || true
 
 # 3. Minecraft サーバーへの save-all & stop
 echo ">> [3/5] Minecraftワールドを保存して停止中..."
-screen -S mc -p 0 -X stuff "say サーバーを安全にシャットダウンします...^M" 2>/dev/null || true
-sleep 1
-screen -S mc -p 0 -X stuff "save-all^M" 2>/dev/null || true
-sleep 3
-screen -S mc -p 0 -X stuff "stop^M" 2>/dev/null || true
-sleep 10
-screen -S mc -X quit 2>/dev/null || true
+if [ -p "$PIPE_PATH" ]; then
+    echo "say サーバーを安全にシャットダウンします..." > "$PIPE_PATH" 2>/dev/null || true
+    sleep 1
+    echo "save-all" > "$PIPE_PATH" 2>/dev/null || true
+    sleep 3
+    echo "stop" > "$PIPE_PATH" 2>/dev/null || true
+    sleep 8
+fi
+pkill -f "server.jar" || true
+rm -f "$PIPE_PATH"
 
 # 4. playit.gg の停止
-screen -S playit -X quit 2>/dev/null || true
+pkill -f "playit" || true
 
 # 5. Google Drive / XServer への最終バックアップ同期
 echo ">> [4/5] 最終バックアップをストレージに同期中..."
