@@ -1,0 +1,28 @@
+# Sensitive Keys & Credentials
+*.key
+*.pem
+*.env
+id_rsa*
+
+# Node modules
+node_modules/
+npm-debug.log*
+
+# Minecraft server files & logs
+server.jar
+*.log
+logs/
+crash-reports/
+world/
+world_nether/
+world_the_end/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Temp & Recordings
+recordings/
+backup_temp/
+recorder_pids.txt
+ollama.log
