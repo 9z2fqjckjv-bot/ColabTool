@@ -10,12 +10,12 @@ PLAYIT_VERSION="0.15.26"
 
 echo "=== [1/4] Java 21 および必要パッケージのセットアップ ==="
 apt-get update -qq
-apt-get install -y -qq openjdk-21-jre-headless curl jq screen xvfb ffmpeg x11-utils > /dev/null 2>&1
+apt-get install -y -qq openjdk-21-jre-headless curl jq screen xvfb ffmpeg x11-utils zstd > /dev/null 2>&1
 echo "Javaバージョン:"
 java -version 2>&1 | head -n 1
 
 echo "=== [2/4] Minecraft サーバーディレクトリ作成 ==="
-mkdir -p "$SERVER_DIR"
+mkdir -p "$SERVER_DIR/logs"
 cd "$SERVER_DIR"
 
 # EULA 同意

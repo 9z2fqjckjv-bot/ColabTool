@@ -6,7 +6,7 @@
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVER_DIR="/content/minecraft_server"
-mkdir -p "$SERVER_DIR"
+mkdir -p "$SERVER_DIR/logs"
 
 echo "=================================================="
 echo "    Minecraft AI Colab Server - 自動起動開始"
@@ -25,6 +25,8 @@ echo ">> [3/7] LLM推論エンジンの準備中..."
 if [ -z "$GEMINI_API_KEY" ]; then
     echo "ローカルLLM (Ollama) を確認中..."
     if ! command -v ollama >/dev/null 2>&1; then
+        echo "Ollama に必要な zstd をインストール中..."
+        apt-get install -y -qq zstd >/dev/null 2>&1 || true
         echo "Ollama をインストール中 (数秒)..."
         curl -fsSL https://ollama.com/install.sh | sh || true
     fi
