@@ -44,7 +44,10 @@ def restore_from_gdrive():
         log(f"Google Driveから最新アーカイブを検出: {latest_archive.name}")
         SERVER_DIR.mkdir(parents=True, exist_ok=True)
         with tarfile.open(latest_archive, "r:gz") as tar:
-            tar.extractall(path=SERVER_DIR)
+            try:
+                tar.extractall(path=SERVER_DIR, filter='data')
+            except TypeError:
+                tar.extractall(path=SERVER_DIR)
         log("ワールドデータの復元が完了しました。")
         return True
     else:

@@ -103,7 +103,7 @@ if [ -n "$CLAIM_URL" ]; then
 fi
 
 # すでに登録済みトンネルがあるか確認
-TUNNEL_ADDR=$(grep -oE "[a-zA-Z0-9\.\-]+\.(gl\.joinmc\.link|auto\.playit\.gg|playit\.gg):?[0-9]*" /content/playit.log 2>/dev/null | tail -n 1)
+TUNNEL_ADDR=$(grep -oE "[a-zA-Z0-9\.\-]+\.(gl\.joinmc\.link|auto\.playit\.gg|playit\.gg|tun\.ply\.gg):?[0-9]*" /content/playit.log 2>/dev/null | tail -n 1)
 if [ -n "$TUNNEL_ADDR" ]; then
     echo "🎉 発行済み接続アドレス:"
     echo "👉 $TUNNEL_ADDR"
