@@ -13,9 +13,18 @@ echo "=================================================="
 echo "  🚀 稼働中サーバーへのリアルタイム改善反映"
 echo "=================================================="
 
-# 1. 最新リポジトリの取得
-cd "$REPO_DIR"
-git pull origin main || true
+# 1. 最新リポジトリの取得 (.git がない場合も対応)
+if [ -d "$REPO_DIR/.git" ]; then
+    cd "$REPO_DIR" && git pull origin main || true
+else
+    echo "最新スクリプトを取得中..."
+    rm -rf /tmp/ColabTool_fetch
+    git clone --depth 1 https://github.com/9z2fqjckjv-bot/ColabTool.git /tmp/ColabTool_fetch 2>/dev/null || true
+    if [ -d "/tmp/ColabTool_fetch" ]; then
+        cp -rf /tmp/ColabTool_fetch/* "$REPO_DIR/"
+        rm -rf /tmp/ColabTool_fetch
+    fi
+fi
 
 # 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) のコンパイル & 配置
 echo ">> [1/4] レーダー地図プラグインをコンパイル中..."
