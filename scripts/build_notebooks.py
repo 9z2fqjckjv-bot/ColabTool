@@ -10,6 +10,7 @@ file_rel_paths = [
     'scripts/start_all.sh',
     'scripts/shutdown.sh',
     'scripts/backup_restore.py',
+    'scripts/live_apply.sh',
     'bot/package.json',
     'bot/persona.js',
     'bot/brain.js',
