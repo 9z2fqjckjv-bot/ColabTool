@@ -39,7 +39,7 @@ function createBot(personaKey, index) {
     host: SERVER_HOST,
     port: SERVER_PORT,
     username: persona.name,
-    version: false // 自動検出
+    version: '1.20.4' // サーバー側のViaVersionが1.21.1と相互変換するため最高安定
   });
 
   bot.loadPlugin(pathfinder);

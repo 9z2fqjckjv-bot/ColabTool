@@ -114,11 +114,17 @@ echo ""
 # 6. Bot依存関係インストール & AIPlayerクラスタ起動
 echo ">> [6/7] AIPlayer群 (Gemini, ChatGPT, Claude, Grok) 起動中..."
 cd "$REPO_DIR/bot"
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "Node.js / npm をインストール中..."
+    apt-get install -y -qq nodejs npm > /dev/null 2>&1 || true
+fi
 if [ ! -d "node_modules" ]; then
-    npm install --silent > /dev/null 2>&1 || true
+    echo "Mineflayer Bot の依存関係をインストール中 (約30秒〜1分)..."
+    npm install --silent > /content/npm_install.log 2>&1 || npm install
 fi
 pkill -f "node index.js" || true
 nohup node index.js > /content/bots.log 2>&1 &
+echo "Botプロセスを起動しました (ログ: /content/bots.log)"
 
 # 7. 画面視認 & 録画開始
 echo ">> [7/7] Bot視点自動録画システム起動中..."
