@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # start_all.sh - ワンクリック完全起動スクリプト
-# (サーバー・トンネル・LLM・Bot・録画・バックアップ)
+# (サーバー・トンネル・LLM・Bot・録画・バックアップ・動向監視)
 # ==============================================================================
 set -e
 
@@ -52,14 +52,15 @@ echo "Minecraftサーバーが正常に起動しました！"
 
 # 5. playit.gg トンネル起動
 echo ">> [5/7] playit.gg トンネル接続中..."
-screen -dmS playit playit
-
+screen -dmS playit playit --stdout
 sleep 5
+
 echo ""
 echo "=================================================="
 echo "★ Minecraft 接続先アドレスの確認 ★"
 echo "playit.gg の出力ログ:"
-grep -E "claim|tunnel|connect" /root/.config/playit/playit.log 2>/dev/null || true
+grep -E "claim|tunnel|connect|setup at" /root/.config/playit/playit.log 2>/dev/null || true
+echo "※ 初回の場合、上記に表示された URL にアクセスしてトンネル登録（無料・ワンクリック）を行ってください。"
 echo "手元のJava版Minecraftクライアントから接続してください。"
 echo "=================================================="
 echo ""
@@ -80,12 +81,19 @@ echo ""
 echo "=================================================="
 echo "    全システム起動完了！サバイバルをお楽しみください"
 echo "=================================================="
-echo "※ 終了時は、Colab上の「シャットダウンセル」を実行してください。"
+echo "※ 終了時は、ノートブックの「シャットダウンセル」を実行してください。"
+echo "※ 以下にサーバーのログ・動向をリアルタイム表示します..."
 echo ""
 
-# バックグラウンド定期バックアップループ (10分ごと)
-while true; do
-    sleep 600
-    echo "[AutoBackup] 定期バックアップを実行中..."
-    python3 "$REPO_DIR/scripts/backup_restore.py" backup || true
-done
+# バックグラウンドで10分ごとの定期バックアップを実行
+(
+    while true; do
+        sleep 600
+        echo ""
+        echo "[AutoBackup] 定期バックアップを実行中..."
+        python3 "$REPO_DIR/scripts/backup_restore.py" backup || true
+    done
+) &
+
+# サーバーのログをリアルタイム監視・出力
+tail -f "$SERVER_DIR/logs/latest.log"
