@@ -84,7 +84,15 @@ fi
 echo ">> [5/7] playit.gg トンネル接続中..."
 pkill -f "playit" || true
 nohup playit --stdout > /content/playit.log 2>&1 &
-sleep 6
+echo "playit.gg の接続確立を待機中..."
+for i in {1..20}; do
+    if grep -qE "claim|tunnel|tun\.ply\.gg|joinmc\.link" /content/playit.log 2>/dev/null; then
+        break
+    fi
+    sleep 1
+    echo -n "."
+done
+echo ""
 
 echo ""
 echo "=================================================="
@@ -107,6 +115,11 @@ TUNNEL_ADDR=$(grep -oE "[a-zA-Z0-9\.\-]+\.(gl\.joinmc\.link|auto\.playit\.gg|pla
 if [ -n "$TUNNEL_ADDR" ]; then
     echo "🎉 発行済み接続アドレス:"
     echo "👉 $TUNNEL_ADDR"
+fi
+
+if [ -z "$CLAIM_URL" ] && [ -z "$TUNNEL_ADDR" ]; then
+    echo "トンネル最新ログ:"
+    tail -n 8 /content/playit.log 2>/dev/null || true
 fi
 echo "=================================================="
 echo ""
