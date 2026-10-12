@@ -7,12 +7,6 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const pvp = require('mineflayer-pvp').plugin;
 const autoEat = require('mineflayer-auto-eat').plugin;
-let mineflayerViewer = null;
-try {
-  mineflayerViewer = require('prismarine-viewer').mineflayer;
-} catch (e) {
-  console.warn('[Viewer] prismarine-viewer はスキップされました (Botの動作には影響ありません)');
-}
 const fs = require('fs');
 const path = require('path');
 
@@ -52,22 +46,12 @@ function createBot(personaKey, index) {
   bot.loadPlugin(autoEat);
 
   bot.once('spawn', () => {
-    console.log(`[${persona.name}] サーバーにスポーンしました！`);
+    console.log(`🎉 [${persona.name}] サーバーにスポーンしました！`);
     appendDiary(`${persona.name} がサーバーにスポーンしました。`);
 
     const mcData = require('minecraft-data')(bot.version);
     const defaultMove = new Movements(bot, mcData);
     bot.pathfinder.setMovements(defaultMove);
-
-    // 1体目（Gemini）のみPrismarine-viewerの3D視点描画を有効化（ポート3000）
-    if (index === 0 && mineflayerViewer) {
-      try {
-        mineflayerViewer(bot, { port: 3000, firstPerson: true });
-        console.log(`[Viewer] Prismarine-Viewer がポート 3000 で起動しました (Bot: ${persona.name})`);
-      } catch (err) {
-        console.error('[Viewer] 起動エラー:', err.message);
-      }
-    }
 
     // 初回挨拶
     setTimeout(() => {
