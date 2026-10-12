@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-backup_restore.py - Minecraft Server Data & Recording Sync (Google Drive & XServer)
+backup_restore.py - Minecraft Server Data, POV Recordings & Action Diaries Sync
+(Google Drive & XServer Dual-Storage Synchronization)
 """
 
 import os
@@ -12,11 +13,23 @@ from datetime import datetime
 from pathlib import Path
 
 SERVER_DIR = Path("/content/minecraft_server")
-LOCAL_BACKUP_DIR = Path("/content/backup_temp")
 GDRIVE_DIR = Path("/content/drive/MyDrive/Minecraft_Colab")
 RECORDINGS_DIR = Path("/content/recordings")
+LOGS_DIR = Path("/content/logs")
 
-# 保存対象のディレクトリ・ファイル
+# リポジトリ内のSSH秘密鍵の検索
+POSSIBLE_KEY_PATHS = [
+    Path("/content/ColabTool/nanndemoya26.key"),
+    Path(__file__).resolve().parent.parent / "nanndemoya26.key",
+    Path("/content/nanndemoya26.key"),
+]
+
+# XServer 接続情報 (nanndemoya26.key に紐づくホスト・ユーザー・ポート)
+XSERVER_HOST = os.environ.get("XSERVER_HOST", "sv17151.xserver.jp")
+XSERVER_USER = os.environ.get("XSERVER_USER", "nanndemoya26")
+XSERVER_PORT = os.environ.get("XSERVER_PORT", "10022")
+XSERVER_REMOTE_DIR = os.environ.get("XSERVER_REMOTE_DIR", "~/minecraft_backup")
+
 SAVE_TARGETS = [
     "world",
     "world_nether",
@@ -31,34 +44,63 @@ SAVE_TARGETS = [
 def log(msg: str):
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}", flush=True)
 
-def restore_from_gdrive():
-    """Google Driveから最新のワールドデータを復元"""
-    if not GDRIVE_DIR.exists():
-        log("Google Driveがマウントされていないか、Minecraft_Colabフォルダが見つかりません。新規ワールドで開始します。")
-        return False
-
-    latest_archive = None
-    archives = sorted(GDRIVE_DIR.glob("mc_world_*.tar.gz"), key=os.path.getmtime, reverse=True)
-    if archives:
-        latest_archive = archives[0]
-        log(f"Google Driveから最新アーカイブを検出: {latest_archive.name}")
-        SERVER_DIR.mkdir(parents=True, exist_ok=True)
-        with tarfile.open(latest_archive, "r:gz") as tar:
+def find_xserver_key():
+    for p in POSSIBLE_KEY_PATHS:
+        if p.exists():
             try:
-                tar.extractall(path=SERVER_DIR, filter='data')
-            except TypeError:
-                tar.extractall(path=SERVER_DIR)
-        log("ワールドデータの復元が完了しました。")
-        return True
-    else:
-        log("Google Drive内に既存のワールドアーカイブが見つかりません。新規作成します。")
-        return False
+                os.chmod(p, 0o600)
+            except Exception:
+                pass
+            return str(p)
+    return None
+
+def restore_from_storage():
+    """Google DriveまたはXServerからワールドデータを復元"""
+    SERVER_DIR.mkdir(parents=True, exist_ok=True)
+
+    # 1. Google Drive からの復元確認
+    if GDRIVE_DIR.exists():
+        archives = sorted(GDRIVE_DIR.glob("mc_world_*.tar.gz"), key=os.path.getmtime, reverse=True)
+        if archives:
+            latest_archive = archives[0]
+            log(f"Google Driveからワールドアーカイブを復元中: {latest_archive.name}")
+            with tarfile.open(latest_archive, "r:gz") as tar:
+                try:
+                    tar.extractall(path=SERVER_DIR, filter='data')
+                except TypeError:
+                    tar.extractall(path=SERVER_DIR)
+            log("✅ Google Driveからワールド復元完了。")
+            return True
+
+    # 2. XServer からの復元確認 (Google Driveが空または無い場合)
+    key_path = find_xserver_key()
+    if key_path and XSERVER_HOST and XSERVER_USER:
+        log(f"XServer ({XSERVER_HOST}) からの復元を試行中...")
+        temp_tar = Path("/tmp/mc_restore_xserver.tar.gz")
+        ssh_cmd = f"ssh -p {XSERVER_PORT} -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=8"
+        scp_cmd = [
+            "scp", "-P", str(XSERVER_PORT), "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
+            f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/mc_world_latest.tar.gz",
+            str(temp_tar)
+        ]
+        try:
+            subprocess.run(scp_cmd, check=True)
+            if temp_tar.exists() and temp_tar.stat().st_size > 0:
+                with tarfile.open(temp_tar, "r:gz") as tar:
+                    tar.extractall(path=SERVER_DIR)
+                log("✅ XServerからワールド復元完了。")
+                return True
+        except Exception as e:
+            log(f"XServerからの復元スキップ: {e}")
+
+    log("新規ワールドでサーバーを開始します。")
+    return False
 
 def backup_to_gdrive():
-    """Google Driveへワールドデータを保存"""
+    """Google Driveへワールド、録画動画、行動日誌を保存"""
     if not SERVER_DIR.exists():
         log("サーバーディレクトリが存在しません。")
-        return False
+        return None
 
     GDRIVE_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -72,10 +114,12 @@ def backup_to_gdrive():
             target_path = SERVER_DIR / target
             if target_path.exists():
                 tar.add(target_path, arcname=target)
+        # 行動日誌も含める
+        if LOGS_DIR.exists():
+            tar.add(LOGS_DIR, arcname="logs")
 
-    # latestとしてもコピー
     shutil.copy2(archive_path, latest_path)
-    log("Google Driveへのバックアップが完了しました。")
+    log("✅ Google Driveへワールドアーカイブ保存完了。")
 
     # 録画動画の同期
     if RECORDINGS_DIR.exists():
@@ -86,43 +130,79 @@ def backup_to_gdrive():
             if not dest.exists() or dest.stat().st_size != mp4.stat().st_size:
                 log(f"録画動画をGoogle Driveに同期中: {mp4.name}")
                 shutil.copy2(mp4, dest)
-    return True
 
-def sync_to_xserver(host, user, port, key_path, remote_dir):
-    """XServerへrsyncで同期（オプション）"""
-    if not host or not user:
-        return
-    log(f"XServer ({host}) へのバックアップ同期を開始...")
-    archive_latest = GDRIVE_DIR / "mc_world_latest.tar.gz"
-    if not archive_latest.exists():
-        log("送信するアーカイブがありません。")
+    # 行動日誌の同期
+    if LOGS_DIR.exists():
+        gdrive_logs_dir = GDRIVE_DIR / "logs"
+        gdrive_logs_dir.mkdir(parents=True, exist_ok=True)
+        for md in LOGS_DIR.glob("*.md"):
+            dest = gdrive_logs_dir / md.name
+            shutil.copy2(md, dest)
+
+    return latest_path
+
+def backup_to_xserver(archive_path: Path):
+    """XServerへ nanndemoya26.key を利用して同期"""
+    key_path = find_xserver_key()
+    if not key_path:
+        log("⚠️ nanndemoya26.key が見つからないため、XServer同期をスキップします。")
         return
 
-    ssh_cmd = f"ssh -p {port} -i {key_path} -o StrictHostKeyChecking=no"
-    cmd = [
-        "rsync", "-avz", "-e", ssh_cmd,
-        str(archive_latest),
-        f"{user}@{host}:{remote_dir}/"
-    ]
-    try:
-        subprocess.run(cmd, check=True)
-        log("XServerへの同期が成功しました。")
-    except Exception as e:
-        log(f"XServer同期エラー: {e}")
+    log(f"🚀 XServer ({XSERVER_HOST}) へGoogle Driveと同様のバックアップを同期開始...")
+    ssh_opts = f"-p {XSERVER_PORT} -i {key_path} -o StrictHostKeyChecking=no -o ConnectTimeout=10"
+
+    # リモートディレクトリの作成
+    mkdir_cmd = f"ssh {ssh_opts} {XSERVER_USER}@{XSERVER_HOST} 'mkdir -p {XSERVER_REMOTE_DIR}/recordings {XSERVER_REMOTE_DIR}/logs'"
+    subprocess.run(mkdir_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # 1. ワールドアーカイブの送信
+    if archive_path and archive_path.exists():
+        scp_world = [
+            "scp", "-P", str(XSERVER_PORT), "-i", key_path, "-o", "StrictHostKeyChecking=no",
+            str(archive_path),
+            f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/mc_world_latest.tar.gz"
+        ]
+        try:
+            subprocess.run(scp_world, check=True)
+            log("✅ XServerへワールドアーカイブ送信完了。")
+        except Exception as e:
+            log(f"⚠️ XServerワールド送信エラー: {e}")
+
+    # 2. 録画動画の同期 (rsync)
+    if RECORDINGS_DIR.exists() and any(RECORDINGS_DIR.glob("*.mp4")):
+        rsync_rec = [
+            "rsync", "-avz", "--timeout=30",
+            "-e", f"ssh {ssh_opts}",
+            f"{RECORDINGS_DIR}/",
+            f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/recordings/"
+        ]
+        try:
+            subprocess.run(rsync_rec, check=True)
+            log("✅ XServerへ録画動画同期完了。")
+        except Exception as e:
+            log(f"⚠️ XServer録画同期エラー: {e}")
+
+    # 3. 行動日誌の同期 (rsync)
+    if LOGS_DIR.exists() and any(LOGS_DIR.glob("*.md")):
+        rsync_logs = [
+            "rsync", "-avz", "--timeout=15",
+            "-e", f"ssh {ssh_opts}",
+            f"{LOGS_DIR}/",
+            f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/logs/"
+        ]
+        try:
+            subprocess.run(rsync_logs, check=True)
+            log("✅ XServerへ行動日誌同期完了。")
+        except Exception as e:
+            log(f"⚠️ XServer日誌同期エラー: {e}")
 
 if __name__ == "__main__":
     action = sys.argv[1] if len(sys.argv) > 1 else "backup"
     if action == "restore":
-        restore_from_gdrive()
+        restore_from_storage()
     elif action == "backup":
-        backup_to_gdrive()
-        # XServer環境変数があれば同期
-        x_host = os.environ.get("XSERVER_HOST")
-        x_user = os.environ.get("XSERVER_USER")
-        x_port = os.environ.get("XSERVER_PORT", "22")
-        x_key = os.environ.get("XSERVER_KEY", "/root/.ssh/id_rsa")
-        x_dir = os.environ.get("XSERVER_REMOTE_DIR", "~/minecraft_backup")
-        if x_host and x_user:
-            sync_to_xserver(x_host, x_user, x_port, x_key, x_dir)
+        latest_archive = backup_to_gdrive()
+        if latest_archive:
+            backup_to_xserver(latest_archive)
     else:
         print(f"Unknown action: {action}")

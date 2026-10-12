@@ -1,23 +1,24 @@
 #!/bin/bash
 # ==============================================================================
-# setup_server.sh - Minecraft Paper/Purpur Server & playit.gg Auto Setup
+# setup_server.sh - Minecraft Paper Server & playit.gg & RadarMap Auto Setup
 # ==============================================================================
 set -e
 
 SERVER_DIR="/content/minecraft_server"
 MINECRAFT_VERSION="1.21.1" # 最新安定版
 PLAYIT_VERSION="0.15.26"
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-echo "=== [1/4] Java 21 および必要パッケージのセットアップ ==="
+echo "=== [1/4] Java 21 JDK および必要パッケージのセットアップ ==="
 apt-get update -qq
-apt-get install -y -qq openjdk-21-jre-headless curl jq screen xvfb ffmpeg x11-utils zstd nodejs npm > /dev/null 2>&1
+apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils zstd nodejs npm rsync > /dev/null 2>&1
 echo "Javaバージョン:"
 java -version 2>&1 | head -n 1
 echo "Nodeバージョン:"
 node -v 2>&1 || true
 
 echo "=== [2/4] Minecraft サーバーディレクトリ作成 ==="
-mkdir -p "$SERVER_DIR/logs"
+mkdir -p "$SERVER_DIR/logs" "$SERVER_DIR/plugins"
 cd "$SERVER_DIR"
 
 # EULA 同意
@@ -43,7 +44,6 @@ EOF
 
 echo "=== [3/4] PaperMC (Java 21 最適化サーバー) のダウンロード ==="
 if [ ! -f "server.jar" ]; then
-    # PaperMC APIから最新ビルドを取得
     PAPER_PROJECT="paper"
     LATEST_BUILD=$(curl -s "https://api.papermc.io/v2/projects/${PAPER_PROJECT}/versions/${MINECRAFT_VERSION}" | jq '.builds[-1]')
     if [ "$LATEST_BUILD" != "null" ] && [ -n "$LATEST_BUILD" ]; then
@@ -68,11 +68,24 @@ if [ ! -f "/usr/local/bin/playit" ]; then
 fi
 echo "playit.gg の準備完了"
 
-echo "=== [追加] 互換性プラグイン (ViaVersion) の導入 ==="
-mkdir -p "$SERVER_DIR/plugins"
+echo "=== [追加1] 互換性プラグイン (ViaVersion) の導入 ==="
 if [ ! -f "$SERVER_DIR/plugins/ViaVersion.jar" ]; then
     echo "最新クライアント互換プラグイン (ViaVersion) をダウンロード中..."
-    curl -sL -o "$SERVER_DIR/plugins/ViaVersion.jar" "https://github.com/ViaVersion/ViaVersion/releases/download/5.12.1/ViaVersion-5.12.1.jar"
+    curl -sL -o "$SERVER_DIR/plugins/ViaVersion.jar" "https://github.com/ViaVersion/ViaVersion/releases/download/5.12.1/ViaVersion-5.12.1.jar" || true
+fi
+
+echo "=== [追加2] 自動縮尺レーダー地図プラグイン (RadarMap) のビルド ==="
+if [ -d "$REPO_DIR/plugins_src/RadarMap" ]; then
+    echo "RadarMap プラグインをコンパイル中..."
+    BUILD_DIR="/tmp/radarmap_build"
+    rm -rf "$BUILD_DIR"
+    mkdir -p "$BUILD_DIR/classes"
+    javac -cp "$SERVER_DIR/server.jar" -d "$BUILD_DIR/classes" \
+        "$REPO_DIR/plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/"*.java
+    cp "$REPO_DIR/plugins_src/RadarMap/src/main/resources/plugin.yml" "$BUILD_DIR/classes/"
+    jar -cf "$SERVER_DIR/plugins/RadarMap.jar" -C "$BUILD_DIR/classes" .
+    rm -rf "$BUILD_DIR"
+    echo "✅ RadarMap.jar のビルド完了！"
 fi
 
 echo "=== サーバーセットアップ完了 ==="
