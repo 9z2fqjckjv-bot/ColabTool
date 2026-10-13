@@ -270,8 +270,8 @@ nb = {
    "metadata": {},
    "source": [
     "---\n",
-    "## 🔄 ステップ 6: 【稼働中サーバーへの最新設定反映（playit固定化・RadarMap・AI反映）】\n",
-    "サーバーを止めずに、固定トンネル (zuyasi.playit.plus) への切替、最新のレーダー地図プラグイン、Bot設定を即座に再反映したい場合はこのセルを実行してください。"
+    "## 🔄 ステップ 6: 【稼働中サーバーへの最新反映（画面収録・行動日誌・RadarMap・AI反映）】\n",
+    "サーバーを止めずに、AIPlayerの4分割画面収録・行動日誌機能の修復/再起動、固定トンネル (zuyasi.playit.plus) への切替、最新レーダー地図プラグインを即座に再反映したい場合はこのセルを実行してください。"
    ]
   },
   {
@@ -280,7 +280,7 @@ nb = {
    "metadata": {},
    "outputs": [],
    "source": [
-    "#@title 🔄 稼働中サーバーへの最新反映 (playit固定化・RadarMap配布・LLM確認・Bot再起動)\n",
+    "#@title 🔄 稼働中サーバーへの最新反映 (画面収録修復・行動日誌・RadarMap・Bot再起動)\n",
     "!curl -sL https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/scripts/live_apply.sh | bash\n"
    ]
   },

@@ -95,36 +95,79 @@ function isBlockOpen(block) {
  * 個別および統合の行動日誌記録
  */
 function recordDiary(botName, actionType, detail, pos = null) {
-  const now = new Date();
-  const timeStr = now.toLocaleTimeString('ja-JP');
-  const isoStr = now.toISOString();
-  const posStr = pos ? `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)}` : '不明';
-
-  const row = `| ${timeStr} | \`${posStr}\` | **${actionType}** | ${detail.replace(/\|/g, '-')} |\n`;
-
-  // 1. 各AIPlayer専用の日誌
-  const botDiaryPath = path.join(LOGS_DIR, `${botName}_diary.md`);
-  if (!fs.existsSync(botDiaryPath)) {
-    const header = `# 📔 ${botName} のサバイバル行動日誌\n\n- **記録開始**: ${isoStr}\n- **サーバー**: ${SERVER_HOST}:${SERVER_PORT}\n\n| 時刻 | 座標 (X, Y, Z) | 行動種別 | 詳細・思考・対話 |\n| :--- | :--- | :--- | :--- |\n`;
-    fs.writeFileSync(botDiaryPath, header, 'utf8');
-  }
-  fs.appendFileSync(botDiaryPath, row, 'utf8');
-
-  // 2. 全体統合タイムライン日誌
-  const combinedPath = path.join(LOGS_DIR, 'survival_diary_combined.md');
-  if (!fs.existsSync(combinedPath)) {
-    const header = `# 🌐 Minecraft AI 統合サバイバル活動日誌\n\n- **記録開始**: ${isoStr}\n\n| 時刻 | キャラクター | 座標 | 種別 | 内容 |\n| :--- | :--- | :--- | :--- | :--- |\n`;
-    fs.writeFileSync(combinedPath, header, 'utf8');
-  }
-  const combinedRow = `| ${timeStr} | **${botName}** | \`${posStr}\` | ${actionType} | ${detail.replace(/\|/g, '-')} |\n`;
-  fs.appendFileSync(combinedPath, combinedRow, 'utf8');
-
-  // 3. AIの頭脳（知識・履歴データベース）へも自動蓄積
   try {
-    const isChat = actionType.includes('対話') || actionType.includes('発言') || actionType.includes('挨拶');
-    const histType = isChat ? 'chat' : 'action';
-    brain.knowledgeBase.recordHistory(histType, botName, `${actionType}: ${detail}`, pos);
-  } catch (_) {}
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('ja-JP');
+    const isoStr = now.toISOString();
+    let posStr = '不明';
+    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number' && typeof pos.z === 'number') {
+      posStr = `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)}`;
+    }
+
+    const safeDetail = (detail !== null && detail !== undefined) 
+      ? String(detail).replace(/\|/g, '-').replace(/\r?\n/g, ' ') 
+      : '詳細なし';
+    const row = `| ${timeStr} | \`${posStr}\` | **${actionType}** | ${safeDetail} |\n`;
+
+    // ディレクトリの再確認
+    if (!fs.existsSync(LOGS_DIR)) {
+      fs.mkdirSync(LOGS_DIR, { recursive: true });
+    }
+
+    // 1. 各AIPlayer専用の日誌
+    const botDiaryPath = path.join(LOGS_DIR, `${botName}_diary.md`);
+    if (!fs.existsSync(botDiaryPath)) {
+      const header = `# 📔 ${botName} のサバイバル行動日誌\n\n- **記録開始**: ${isoStr}\n- **サーバー**: ${SERVER_HOST}:${SERVER_PORT}\n\n| 時刻 | 座標 (X, Y, Z) | 行動種別 | 詳細・思考・対話 |\n| :--- | :--- | :--- | :--- |\n`;
+      fs.writeFileSync(botDiaryPath, header, 'utf8');
+    }
+    fs.appendFileSync(botDiaryPath, row, 'utf8');
+
+    // 2. 全体統合タイムライン日誌
+    const combinedPath = path.join(LOGS_DIR, 'survival_diary_combined.md');
+    if (!fs.existsSync(combinedPath)) {
+      const header = `# 🌐 Minecraft AI 統合サバイバル活動日誌\n\n- **記録開始**: ${isoStr}\n\n| 時刻 | キャラクター | 座標 | 種別 | 内容 |\n| :--- | :--- | :--- | :--- | :--- |\n`;
+      fs.writeFileSync(combinedPath, header, 'utf8');
+    }
+    const combinedRow = `| ${timeStr} | **${botName}** | \`${posStr}\` | ${actionType} | ${safeDetail} |\n`;
+    fs.appendFileSync(combinedPath, combinedRow, 'utf8');
+
+    // 直近の日誌記録時刻を更新
+    if (activeBots[botName]) {
+      activeBots[botName]._lastDiaryTime = Date.now();
+    }
+
+    // 3. AIの頭脳（知識・履歴データベース）へも自動蓄積
+    try {
+      const isChat = actionType.includes('対話') || actionType.includes('発言') || actionType.includes('挨拶');
+      const histType = isChat ? 'chat' : 'action';
+      brain.knowledgeBase.recordHistory(histType, botName, `${actionType}: ${safeDetail}`, pos);
+    } catch (_) {}
+  } catch (err) {
+    console.error(`[Diary Error - ${botName}] 日誌書き込み例外:`, err.message);
+  }
+}
+
+/**
+ * 定期的な生存・周辺警戒日誌記録ループ (45秒ごと)
+ */
+function startDiaryHeartbeatLoop(bot, botName) {
+  setInterval(() => {
+    try {
+      if (!bot.entity || bot.isSleeping) return;
+      const now = Date.now();
+      const lastTime = bot._lastDiaryTime || 0;
+      // 直近40秒以内に日誌が記録されていればスキップ
+      if (now - lastTime < 40000) return;
+
+      const pos = bot.entity.position;
+      const hp = bot.health !== undefined ? Math.round(bot.health) : 20;
+      const food = bot.food !== undefined ? Math.round(bot.food) : 20;
+      const action = bot.customState ? bot.customState.currentAction : 'idle';
+      const looking = bot.blockAtCursor ? (bot.blockAtCursor(4)?.name || '前方警戒') : '探索中';
+
+      recordDiary(botName, '生存・警戒活動', `ステータス健全 (HP:${hp}/20, 満腹度:${food}/20) | 現在の活動: ${action} | 注視: ${looking}`, pos);
+    } catch (_) {}
+  }, 45000);
 }
 
 /**
@@ -590,6 +633,8 @@ function createBot(personaKey, index) {
       } catch (err) {
         console.warn(`[${botName}] Viewer起動スキップ:`, err.message);
       }
+    } else {
+      console.warn(`[${botName}] prismarine-viewer未ロードのためWeb配信スキップ (代替HUD機能で動作中)`);
     }
 
     // 3秒おきの一人称視界スクリーンショット自動取得を開始
@@ -618,6 +663,9 @@ function createBot(personaKey, index) {
 
     // 日没・夕暮れ時の拠点帰還＆チェスト全収納＆ベッド就寝、朝の探検出発ルーチン監視
     startTimeWatcher(bot, personaKey, index);
+
+    // 定期的な生存・周辺警戒日誌記録ループ (45秒ごと)
+    startDiaryHeartbeatLoop(bot, botName);
 
     // 3秒おきの視覚＋知識ベース(RAG)自律意思決定＆高速行動ループ
     setTimeout(() => {
@@ -1594,7 +1642,7 @@ function startVisionAutonomousLoop(bot, personaKey) {
       console.log(`🤖 [${botName}] 視覚+知識判断完了: ${decision.action} (理由: ${decision.reason || '知識参照'})`);
       executeAction(bot, persona, decision, null);
     } catch (e) {
-      // 軽微なエラーは安全にスキップして次サイクルへ
+      console.warn(`[VisionLoop - ${botName}] 意思決定スキップ (${e.message})`);
     }
   }, 3000);
 }

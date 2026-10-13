@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# live_apply.sh - 稼働中サーバーへRadarMapプラグイン＆AIPlayer最新脳を即時反映
+# live_apply.sh - 稼働中サーバーへRadarMap・AIPlayer・画面収録・行動日誌を即時反映
 # ==============================================================================
 
 set -e
@@ -9,12 +9,14 @@ REPO_DIR="/content/ColabTool"
 SERVER_DIR="/content/minecraft_server"
 PIPE_PATH="$SERVER_DIR/server.pipe"
 
+mkdir -p "$REPO_DIR" /content/logs /content/recordings
+
 echo "=================================================="
 echo "  🚀 稼働中サーバーへのリアルタイム改善反映"
+echo "  (RadarMap・自律AI・4分割POV画面収録・行動日誌)"
 echo "=================================================="
 
 # 1. 最新リポジトリの取得 (.git がある場合は強制同期、ない場合はクローン)
-mkdir -p "$REPO_DIR"
 if [ -d "$REPO_DIR/.git" ]; then
     echo "既存リポジトリを最新の origin/main に完全同期中..."
     cd "$REPO_DIR"
@@ -30,14 +32,19 @@ else
     fi
 fi
 
-# 確実性保証: 最新botコード (拠点就寝・チェスト収納・村人ドア開閉・障害物迂回) を同期
-mkdir -p "$REPO_DIR/bot"
+# 確実性保証: 最新コードを直接同期
+mkdir -p "$REPO_DIR/bot" "$REPO_DIR/recorder" "$REPO_DIR/scripts"
 for bfile in index.js brain.js knowledge_base.js persona.js vision_capturer.js package.json; do
     curl -sL -o "$REPO_DIR/bot/$bfile" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/bot/$bfile" || true
 done
 
+for rfile in record_viewer.sh multiview.html; do
+    curl -sL -o "$REPO_DIR/recorder/$rfile" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/recorder/$rfile" || true
+done
+chmod +x "$REPO_DIR/recorder/record_viewer.sh" "$REPO_DIR/scripts/"*.sh "$REPO_DIR/scripts/"*.py 2>/dev/null || true
+
 # 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) の配置
-echo ">> [1/4] レーダー地図プラグインを配置中..."
+echo ">> [1/6] レーダー地図プラグインを配置中..."
 mkdir -p "$SERVER_DIR/plugins"
 if [ -f "$REPO_DIR/plugins/RadarMap.jar" ]; then
     cp -f "$REPO_DIR/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
@@ -47,7 +54,7 @@ fi
 echo "✅ RadarMap.jar の配置完了！"
 
 # 3. サーバー稼働状態の確認（稼働中なら切断を防ぐため再起動しない）
-echo ">> [2/4] Minecraftサーバー稼働確認..."
+echo ">> [2/6] Minecraftサーバー稼働確認..."
 if pgrep -f "server.jar" > /dev/null 2>&1; then
     echo "✅ Minecraftサーバーは正常稼働中です (プレイヤー切断を防ぐため停止しません)。"
 else
@@ -67,7 +74,7 @@ else
 fi
 
 # 4. LLMエンジンの起動確認 & 高速モデル準備
-echo ">> [3/4] LLM推論エンジンの稼働確認..."
+echo ">> [3/6] LLM推論エンジンの稼働確認..."
 if [ -z "$GEMINI_API_KEY" ]; then
     if ! pgrep -f "ollama serve" > /dev/null 2>&1; then
         echo "Ollamaサーバーをバックグラウンド起動..."
@@ -78,23 +85,37 @@ if [ -z "$GEMINI_API_KEY" ]; then
     ollama pull qwen2.5:1.5b > /dev/null 2>&1 || true
 fi
 
-# 5. AIPlayer Bot の依存関係確認 & 再起動 (最新3秒視覚スクショ/知識ベースRAG/自律行動を反映)
-echo ">> [4/4] AIPlayerクラスタ (Gemini, ChatGPT, Claude, Grok) の最新コード反映..."
+# 5. AIPlayer Bot の依存関係確認 & 再起動 (最新3秒視覚スクショ/知識ベースRAG/自律行動/行動日誌を反映)
+echo ">> [4/6] AIPlayerクラスタ (Gemini, ChatGPT, Claude, Grok) の最新コード反映..."
 cd "$REPO_DIR/bot"
-if [ ! -d "node_modules/canvas" ]; then
-    npm install canvas --no-save > /dev/null 2>&1 || true
+if [ ! -d "node_modules/canvas" ] || [ ! -d "node_modules/prismarine-viewer" ]; then
+    echo "依存関係 (canvas, prismarine-viewer) をインストール中..."
+    npm install --silent > /content/npm_install.log 2>&1 || npm install || true
 fi
 if [ ! -d "node_modules/puppeteer" ]; then
     npm install puppeteer --no-save > /dev/null 2>&1 || true
 fi
 
-pkill -f "node index.js" || true
+# 既存Botプロセス終了 & ポート解放
+pkill -9 -f "node index.js" || true
+fuser -k 3001/tcp 3002/tcp 3003/tcp 3004/tcp 2>/dev/null || true
 sleep 1
 nohup node index.js > /content/bots.log 2>&1 &
-echo "✅ AIPlayerクラスタ (3秒視覚スクショ + Minecraft知識RAG搭載) を最新コードで再起動しました。"
+echo "✅ AIPlayerクラスタ (3秒視覚スクショ + 知識RAG + 自動行動日誌) を最新コードで再起動しました。"
 
-# 6. playit.gg トンネルの生存確認 (停止している場合のみ再起動)
-echo ">> [追加] playit.gg トンネル状態確認..."
+# 6. 4分割一人称視点 (POV) 画面収録システムの再起動
+echo ">> [5/6] 4分割画面視線収録 (POV) システムの最新反映・再起動..."
+pkill -f "ffmpeg -y -f x11grab" || true
+pkill -f "multiview.html" || true
+pkill -f "http.server 8088" || true
+pkill -f "Xvfb :99" || true
+sleep 1
+
+nohup bash "$REPO_DIR/recorder/record_viewer.sh" > /content/recorder.log 2>&1 &
+echo "✅ 4分割画面収録システムをバックグラウンド起動しました。"
+
+# 7. playit.gg トンネルの生存確認 (停止している場合のみ再起動)
+echo ">> [6/6] playit.gg トンネル状態確認..."
 if pgrep -f "playit" > /dev/null 2>&1; then
     echo "✅ playit.gg トンネルは既に正常稼働中です。"
 else
@@ -110,16 +131,49 @@ else
     sleep 3
 fi
 
+# 8. 稼働診断 (行動日誌 & 画面収録)
+sleep 4
+echo ""
 echo "=================================================="
-echo "🎉 反映完了！最新の稼働ログ:"
+echo "🔍 稼働診断: AIPlayer・画面収録・行動日誌"
 echo "=================================================="
-tail -n 15 /content/bots.log 2>/dev/null || true
+
+# 行動日誌のチェック
+echo "【1. 行動日誌 (/content/logs/)】"
+DIARY_FILES=$(ls -1 /content/logs/*_diary.md 2>/dev/null || true)
+if [ -n "$DIARY_FILES" ]; then
+    echo "✅ 生成確認された行動日誌一覧:"
+    for df in $DIARY_FILES; do
+        echo "   📄 $(basename "$df") ($(wc -l < "$df") 行記録中)"
+    done
+else
+    echo "⏳ 行動日誌はBotのスポーン完了後に順次生成されます (ログ: /content/bots.log)"
+fi
+
+# 画面収録のチェック
+echo ""
+echo "【2. 画面収録システム (/content/recordings/)】"
+if pgrep -f "ffmpeg -y -f x11grab" > /dev/null 2>&1; then
+    echo "✅ ffmpeg 4分割POV録画プロセス稼働中 (PID: $(pgrep -f "ffmpeg -y -f x11grab" | head -n 1))"
+    REC_FILES=$(ls -lh /content/recordings/*.mp4 2>/dev/null || true)
+    if [ -n "$REC_FILES" ]; then
+        echo "   🎥 現在の録画ファイル:"
+        echo "$REC_FILES" | awk '{print "      " $9 " (" $5 ")"}'
+    fi
+else
+    echo "⚠️ 録画システム起動中または待機中 (/content/recorder.log を確認)"
+fi
 
 echo ""
+echo "【3. AIPlayer Bot 直近ログ】"
+tail -n 10 /content/bots.log 2>/dev/null || true
+
+echo ""
+echo "=================================================="
+echo "🎉 ステップ6での最新反映が完了しました！"
 echo "🌐 【固定接続先アドレス】: zuyasi.playit.plus"
 echo "   (予備アドレス: cairo-medicinal.tun.ply.gg:47605)"
-echo "👉 Minecraft内であなたの手元（またはインベントリ/オフハンド）に"
-echo "   「全員位置レーダー地図」が届いているかご確認ください！(Fキーで左手装備推奨)"
-echo "👉 チャットで「@Gemini こんにちは」や「@all 木を集めて」と発言し、"
-echo "   動的生成される個別返答と自律行動をお確かめください！"
+echo "📔 【行動日誌閲覧】: ノートブックの「ステップ 3」を実行して確認できます。"
+echo "🎥 【画面収録保存先】: /content/recordings/ (ステップ 8終了時にDrive/XServerへ同期)"
 echo "=================================================="
+

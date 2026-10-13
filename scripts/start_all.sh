@@ -119,7 +119,9 @@ if [ ! -d "node_modules/canvas" ] || [ ! -d "node_modules/prismarine-viewer" ]; 
         npm install canvas --no-save > /dev/null 2>&1 || true
     fi
 fi
-pkill -f "node index.js" || true
+pkill -9 -f "node index.js" || true
+fuser -k 3001/tcp 3002/tcp 3003/tcp 3004/tcp 2>/dev/null || true
+sleep 1
 nohup node index.js > /content/bots.log 2>&1 &
 echo "✅ AIPlayerクラスタをバックグラウンド起動しました (ログ: /content/bots.log)"
 
