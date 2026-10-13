@@ -270,7 +270,26 @@ nb = {
    "metadata": {},
    "source": [
     "---\n",
-    "## 💻 ステップ 6: 【対話型Webターミナル (colab-xterm)】\n",
+    "## 🔄 ステップ 6: 【稼働中サーバーへの最新設定反映（ホットリロード）】\n",
+    "サーバーを止めずに、最新のプラグインやBot設定を即座に再反映・再同期したい場合はこのセルを実行してください。"
+   ]
+  },
+  {
+   "cell_type": "code",
+   "execution_count": None,
+   "metadata": {},
+   "outputs": [],
+   "source": [
+    "#@title 🔄 稼働中サーバーへの最新反映 (RadarMap配布・LLM確認・Bot再起動)\n",
+    "!bash /content/ColabTool/scripts/live_apply.sh\n"
+   ]
+  },
+  {
+   "cell_type": "markdown",
+   "metadata": {},
+   "source": [
+    "---\n",
+    "## 💻 ステップ 7: 【対話型Webターミナル (colab-xterm)】\n",
     "「特定のセルに依存せずに、ターミナルを活用する」ためのセルです。  \n",
     "実行すると、ブラウザ上で直接操作できる本格的なLinuxターミナルが起動します（終了時は `exit`）。"
    ]
@@ -297,7 +316,7 @@ nb = {
    "metadata": {},
    "source": [
     "---\n",
-    "## 🛑 ステップ 7: 【安全なシャットダウン＆二重バックアップ】\n",
+    "## 🛑 ステップ 8: 【安全なシャットダウン＆二重バックアップ】\n",
     "ゲームを終えるときは、**このセルを実行** してください。  \n",
     "ワールドデータをGoogle DriveおよびXServer (`nanndemoya26.key`) へ確実に二重同期し、録画動画を保存、AIPlayer行動日誌を保存・GitHubプッシュして安全に終了します。"
    ]
