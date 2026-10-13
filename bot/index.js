@@ -163,10 +163,15 @@ function startSafetyWatchdog(bot) {
           // 最寄りの非水ブロック（土・石・砂など）を探索
           const landBlockPos = bot.findBlock({
             matching: block => {
+              if (!block || !block.name || !block.position || typeof block.position.offset !== 'function') return false;
               if (block.name.includes('water') || block.name === 'air') return false;
-              const above = bot.blockAt(block.position.offset(0, 1, 0));
-              const above2 = bot.blockAt(block.position.offset(0, 2, 0));
-              return above && above.name === 'air' && above2 && above2.name === 'air';
+              try {
+                const above = bot.blockAt(block.position.offset(0, 1, 0));
+                const above2 = bot.blockAt(block.position.offset(0, 2, 0));
+                return above && above.name === 'air' && above2 && above2.name === 'air';
+              } catch (_) {
+                return false;
+              }
             },
             maxDistance: 16
           });
@@ -830,7 +835,7 @@ function executeAction(bot, persona, thought, targetPlayer) {
     case 'escape_water':
       bot.setControlState('jump', true);
       const safeLand = bot.findBlock({
-        matching: b => !b.name.includes('water') && b.name !== 'air',
+        matching: b => b && b.name && !b.name.includes('water') && b.name !== 'air',
         maxDistance: 16
       });
       if (safeLand) {
@@ -854,7 +859,7 @@ function executeAction(bot, persona, thought, targetPlayer) {
       autoEquipAll(bot, 'wood');
       const mcData = require('minecraft-data')(bot.version);
       const logBlocks = bot.findBlocks({
-        matching: block => block.name.includes('_log') || block.name.includes('wood'),
+        matching: block => block && block.name && (block.name.includes('_log') || block.name.includes('wood')),
         maxDistance: 24,
         count: 1
       });
@@ -882,7 +887,7 @@ function executeAction(bot, persona, thought, targetPlayer) {
     case 'mine':
       autoEquipAll(bot, 'mine');
       const stoneBlocks = bot.findBlocks({
-        matching: block => block.name.includes('stone') || block.name.includes('coal_ore') || block.name.includes('iron_ore'),
+        matching: block => block && block.name && (block.name.includes('stone') || block.name.includes('coal_ore') || block.name.includes('iron_ore')),
         maxDistance: 16,
         count: 1
       });
