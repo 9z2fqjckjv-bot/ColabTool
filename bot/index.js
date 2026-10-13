@@ -134,13 +134,28 @@ function createBot(personaKey, index) {
     }, 10000 + index * 3000);
   });
 
-  // インベントリ更新イベント (武器や防具を拾った・渡された瞬間に自動装備)
+  // インベントリ更新イベント (bot.inventory はスポーン後に生成されるため spawn イベントで監視登録)
   let equipDebounce = null;
-  bot.inventory.on('updateSlot', (slot, oldItem, newItem) => {
-    if (equipDebounce) clearTimeout(equipDebounce);
-    equipDebounce = setTimeout(() => {
-      autoEquipAll(bot, 'idle');
-    }, 300);
+  bot.on('spawn', () => {
+    if (bot.inventory && !bot.inventory._hasAutoEquipListener) {
+      bot.inventory._hasAutoEquipListener = true;
+      bot.inventory.on('updateSlot', (slot, oldItem, newItem) => {
+        if (equipDebounce) clearTimeout(equipDebounce);
+        equipDebounce = setTimeout(() => {
+          autoEquipAll(bot, 'idle');
+        }, 300);
+      });
+    }
+  });
+
+  // アイテム回収時にも即座に自動装備をトリガー
+  bot.on('playerCollect', (collector) => {
+    if (collector && bot.entity && collector.id === bot.entity.id) {
+      if (equipDebounce) clearTimeout(equipDebounce);
+      equipDebounce = setTimeout(() => {
+        autoEquipAll(bot, 'idle');
+      }, 300);
+    }
   });
 
   // チャット受信イベント (メンション・声掛け対応)
@@ -169,7 +184,7 @@ function createBot(personaKey, index) {
         .filter(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 18)
         .map(e => e.name);
 
-      const inventoryItems = bot.inventory.items().map(i => i.name);
+      const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
 
       const botState = {
         health: bot.health,
@@ -324,6 +339,7 @@ async function autoEquipAll(bot, mode = 'combat') {
  * 基本サバイバルクラフト (原木 -> 木材 -> 棒 -> 作業台 -> 木の剣/ツルハシ)
  */
 async function craftSurvivalKit(bot) {
+  if (!bot.inventory) return;
   const mcData = require('minecraft-data')(bot.version);
   bot.customState.isBusy = true;
   const botName = bot.username;
@@ -489,7 +505,7 @@ function startAutonomousLoop(bot, personaKey) {
       // 周囲の敵対モブを検出
       const hostileEntity = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 14);
 
-      const inventoryItems = bot.inventory.items().map(i => i.name);
+      const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
 
       const botState = {
         health: bot.health,
