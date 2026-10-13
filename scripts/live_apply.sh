@@ -14,6 +14,7 @@ echo "  🚀 稼働中サーバーへのリアルタイム改善反映"
 echo "=================================================="
 
 # 1. 最新リポジトリの取得 (.git がない場合も対応)
+mkdir -p "$REPO_DIR"
 if [ -d "$REPO_DIR/.git" ]; then
     cd "$REPO_DIR" && git pull origin main || true
 else

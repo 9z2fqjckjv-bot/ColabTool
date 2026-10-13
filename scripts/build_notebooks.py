@@ -279,7 +279,7 @@ nb = {
    "outputs": [],
    "source": [
     "#@title 🔄 稼働中サーバーへの最新反映 (playit固定化・RadarMap配布・LLM確認・Bot再起動)\n",
-    "!bash /content/ColabTool/scripts/live_apply.sh\n"
+    "!curl -sL https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/scripts/live_apply.sh | bash\n"
    ]
   },
   {
