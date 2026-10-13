@@ -69,6 +69,8 @@ ${historyStr}
 【あなたの行動選択肢 (action)】
 - "chat": 会話・情報共有
 - "follow": プレイヤーについていく、合流する
+- "craft": 手持ち資材から武器・道具・作業台をクラフトする
+- "equip": 最適な武器や防具を装備する
 - "collect_wood": 近くの木を伐採して原木を集める
 - "mine": 近くの石や鉱石を掘る
 - "attack": 近くのモンスターを迎撃・討伐する
@@ -82,8 +84,8 @@ ${historyStr}
 
 {
   "reply": "あなたの性格に合わせた個性的な発言内容",
-  "action": "chat | follow | collect_wood | mine | attack | explore | stop",
-  "target": "行動の対象（原木、ゾンビ、プレイヤー名など。特になければnull）"
+  "action": "chat | follow | craft | equip | collect_wood | mine | attack | explore | stop",
+  "target": "行動の対象（原木、ゾンビ、プレイヤー名、剣など。特になければnull）"
 }
 `;
 
@@ -114,7 +116,7 @@ ${historyStr}
       return {
         action: 'attack',
         target: botState.hostileMobs[0],
-        thought: `${botState.hostileMobs[0]}を発見！仲間を守るため迎撃に向かう。`
+        thought: `${botState.hostileMobs[0]}を発見！仲間を守るため武器を構えて迎撃に向かう。`
       };
     } else if (hasHostile && health <= 8) {
       return {
@@ -132,15 +134,33 @@ ${historyStr}
       };
     }
 
+    // インベントリに資材（原木など）があり、武器や道具が必要な場合はクラフトを優先
+    const rawItems = botState.inventoryItems || [];
+    const hasLog = rawItems.some(i => i.includes('log') || i.includes('wood'));
+    const hasWeapon = rawItems.some(i => i.includes('sword') || i.includes('axe'));
+    if (hasLog && !hasWeapon) {
+      return {
+        action: 'craft',
+        target: 'wooden_sword',
+        thought: `手持ちの原木を加工して、武器やサバイバルツールを自給自足する。`
+      };
+    }
+
     // 昼間の自律タスクの選択
     const roll = Math.random();
-    if (roll < 0.4) {
+    if (roll < 0.35) {
       return {
         action: 'collect_wood',
         target: 'log',
         thought: `建築やクラフトに必要な木材を集めるため、近くの樹木を伐採する。`
       };
-    } else if (roll < 0.7) {
+    } else if (roll < 0.55) {
+      return {
+        action: 'mine',
+        target: 'stone',
+        thought: `石材や鉱石を採掘してツールのグレードアップを目指す。`
+      };
+    } else if (roll < 0.75) {
       return {
         action: 'explore',
         target: 'surroundings',
@@ -242,7 +262,13 @@ ${historyStr}
     let target = null;
     let reply = '';
 
-    if (msg.includes('木') || msg.includes('切') || msg.includes('材')) {
+    if (msg.includes('クラフト') || msg.includes('作') || msg.includes('作業台') || msg.includes('ツール')) {
+      action = 'craft';
+      target = 'tools';
+    } else if (msg.includes('武器') || msg.includes('装備') || msg.includes('剣') || msg.includes('持っ') || msg.includes('防具')) {
+      action = 'equip';
+      target = 'best';
+    } else if (msg.includes('木') || msg.includes('切') || msg.includes('材')) {
       action = 'collect_wood';
       target = 'log';
     } else if (msg.includes('掘') || msg.includes('石') || msg.includes('鉱')) {
