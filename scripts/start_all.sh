@@ -57,8 +57,8 @@ PIPE_PATH="$SERVER_DIR/server.pipe"
 rm -f "$PIPE_PATH"
 mkfifo "$PIPE_PATH"
 
-# サーバー起動 (バックグラウンドdaemon)
-nohup tail -f "$PIPE_PATH" | java -Xms8G -Xmx12G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
+# サーバー起動 (ColabのRAM 12.7GBでOOM強制終了を防ぐため-Xms2G -Xmx7Gに最適化)
+nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
 MC_PID=$!
 echo "$MC_PID" > /content/mc_server.pid
 
