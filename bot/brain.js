@@ -98,6 +98,9 @@ ${historyStr}
 【あなたの行動選択肢 (action)】
 - "chat": 会話・情報共有
 - "follow": プレイヤーについていく、合流する
+- "return_base": 日没が近づいたため拠点(95, 63, 44)へ戻り、最寄りのチェストに全所持品を収納してベッドで就寝する
+- "explore_morning": 朝を迎え、チェストのアイテムを取らずに所持品が空っぽのまま外へ探検に出かける
+- "give": プレイヤーに近づいて指定されたアイテム（または全所持品）をドロップして手渡す
 - "craft": 作業台（既存または自作）でツール・防具をクラフトする
 - "cook": 近くのかまどや焚き火で肉を焼く・精錬する
 - "equip": 最適な武器や防具を装備する
@@ -116,8 +119,8 @@ ${historyStr}
 
 {
   "reply": "あなたの性格に合わせた個性的な発言内容",
-  "action": "chat | follow | craft | equip | collect_wood | mine | attack | explore | stop",
-  "target": "行動の対象（原木、ゾンビ、プレイヤー名、剣など。特になければnull）"
+  "action": "chat | follow | return_base | explore_morning | give | craft | equip | collect_wood | mine | attack | explore | stop",
+  "target": "行動の対象（原木、ゾンビ、プレイヤー名、剣など。アイテム手渡しの場合は「wood」「stone」「all」など。特になければnull）"
 }
 `;
 
@@ -186,6 +189,9 @@ ${historyDbText}
 ${knowledgeText}
 
 【アクション一覧 (action)】
+- "return_base": 日没が近づいたため拠点(95, 63, 44)へ戻り、最寄りのチェストに全所持品を預けてベッドで寝る
+- "explore_morning": 朝を迎え、チェストのアイテムを取らずに所持品が空っぽのまま外へ探検に出かける
+- "give": プレイヤーにアイテム・資材を手渡す
 - "collect_wood": 視界にある原木を伐採して資材確保
 - "mine": 視界の石や鉱石を採掘
 - "craft": 作業台を使ってツール・武器を作成
@@ -202,7 +208,7 @@ ${knowledgeText}
   "observed": "画像および視界で確認できた客観的状況（1文）",
   "knowledge_used": "参照したMinecraft知識や過去履歴の要約（1文）",
   "reply": "あなたの個性(${persona.personality})に合わせた短いセリフまたは独り言（履歴に触れても良い）",
-  "action": "collect_wood | mine | craft | cook | attack | equip | follow | escape_water | explore | stop",
+  "action": "return_base | explore_morning | give | collect_wood | mine | craft | cook | attack | equip | follow | escape_water | explore | stop",
   "target": "行動の対象（原木、ゾンビ、石、プレイヤー等。特になければnull）",
   "reason": "この行動を選んだ具体的な理由（過去の指示や履歴との繋がり）"
 }
@@ -447,6 +453,11 @@ ${knowledgeText}
       target = botState.hostileMobs[0];
       observed = `視界内にモンスター「${target}」を確認！`;
       reason = '自衛およびプレイヤー保護のため迎撃';
+    } else if (botState.isSunsetApproaching || isNight) {
+      action = 'return_base';
+      target = 'base';
+      observed = '日没が近づき周囲が薄暗くなってきました。モンスターの出現に備える時間帯です。';
+      reason = '拠点(95, 63, 44)へ戻り、最寄りのチェストに全所持品を収納してベッドで就寝するため';
     } else if (lookingAt.includes('log') || lookingAt.includes('wood')) {
       action = 'collect_wood';
       target = lookingAt;
@@ -457,11 +468,6 @@ ${knowledgeText}
       target = lookingAt;
       observed = `正面に採掘可能なブロック「${lookingAt}」を確認。`;
       reason = 'ツールのアップグレード用鉱石を採掘するため';
-    } else if (isNight) {
-      action = 'follow';
-      target = 'player';
-      observed = '夜間になり周囲が暗くなっています。危険度が増加。';
-      reason = 'モンスターの湧きを警戒しプレイヤーと合流';
     }
 
     const reply = persona.name === 'Gemini'
@@ -517,7 +523,23 @@ ${knowledgeText}
     let target = null;
     let actionDesc = '合流して行動を共にします';
 
-    if (cleanMsg.includes('クラフト') || cleanMsg.includes('作') || cleanMsg.includes('作業台') || cleanMsg.includes('ツール')) {
+    if (cleanMsg.includes('拠点') || cleanMsg.includes('ベース') || cleanMsg.includes('寝') || cleanMsg.includes('ベッド') || cleanMsg.includes('おやすみ') || cleanMsg.includes('日没') || cleanMsg.includes('帰還') || cleanMsg.includes('しまって') || cleanMsg.includes('預けて')) {
+      action = 'return_base';
+      target = 'base';
+      actionDesc = '拠点(95, 63, 44)へ戻り、最寄りのチェストに所持品を預けて就寝します';
+    } else if (cleanMsg.includes('朝') && (cleanMsg.includes('探検') || cleanMsg.includes('冒険') || cleanMsg.includes('行こ') || cleanMsg.includes('出発')) || cleanMsg.includes('手ぶら')) {
+      action = 'explore_morning';
+      target = 'explore';
+      actionDesc = 'チェストの物は取らず、所持品が空っぽのまま探検に出発します';
+    } else if (cleanMsg.includes('渡') || cleanMsg.includes('ちょうだい') || cleanMsg.includes('くれ') || cleanMsg.includes('ドロップ') || cleanMsg.includes('落として') || cleanMsg.includes('あげる') || cleanMsg.includes('荷物') || cleanMsg.includes('アイテム') && (cleanMsg.includes('全部') || cleanMsg.includes('全部落と') || cleanMsg.includes('全部渡し'))) {
+      action = 'give';
+      if (cleanMsg.includes('木')) target = 'wood';
+      else if (cleanMsg.includes('石')) target = 'stone';
+      else if (cleanMsg.includes('鉄')) target = 'iron';
+      else if (cleanMsg.includes('肉') || cleanMsg.includes('飯') || cleanMsg.includes('食')) target = 'food';
+      else target = 'all';
+      actionDesc = target === 'all' ? '集めたアイテムをお渡しします' : `${target}をお渡しします`;
+    } else if (cleanMsg.includes('クラフト') || cleanMsg.includes('作') || cleanMsg.includes('作業台') || cleanMsg.includes('ツール')) {
       action = 'craft';
       target = 'tools';
       actionDesc = '手持ち資材で道具や武器をクラフトします';

@@ -13,10 +13,13 @@ echo "=================================================="
 echo "  🚀 稼働中サーバーへのリアルタイム改善反映"
 echo "=================================================="
 
-# 1. 最新リポジトリの取得 (.git がない場合も対応)
+# 1. 最新リポジトリの取得 (.git がある場合は強制同期、ない場合はクローン)
 mkdir -p "$REPO_DIR"
 if [ -d "$REPO_DIR/.git" ]; then
-    cd "$REPO_DIR" && git pull origin main || true
+    echo "既存リポジトリを最新の origin/main に完全同期中..."
+    cd "$REPO_DIR"
+    git fetch origin main || true
+    git reset --hard origin/main || true
 else
     echo "最新スクリプトを取得中..."
     rm -rf /tmp/ColabTool_fetch
@@ -26,6 +29,12 @@ else
         rm -rf /tmp/ColabTool_fetch
     fi
 fi
+
+# 確実性保証: 最新botコード (拠点就寝・チェスト収納・村人ドア開閉・障害物迂回) を同期
+mkdir -p "$REPO_DIR/bot"
+for bfile in index.js brain.js knowledge_base.js persona.js vision_capturer.js package.json; do
+    curl -sL -o "$REPO_DIR/bot/$bfile" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/bot/$bfile" || true
+done
 
 # 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) の配置
 echo ">> [1/4] レーダー地図プラグインを配置中..."

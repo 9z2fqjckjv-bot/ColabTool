@@ -35,6 +35,27 @@ const MINECRAFT_KNOWLEDGE = [
     content: '羊毛3つ＋木材3つでベッドを作成。夜間にベッドを右クリックして眠ると、モンスターが湧く危険な夜を一瞬で朝にスキップできる。またリスポーン地点を固定できる。'
   },
   {
+    id: 'base_night_cycle_chest_bed',
+    category: 'survival',
+    tags: ['base', 'chest', 'bed', 'sleep', 'night', 'sunset', 'morning', 'explore', '拠点', 'チェスト', 'ベッド', '就寝', '日没', '朝', '探検', '所持品'],
+    title: '拠点の夜間生活サイクル（チェスト収納・就寝・朝の空っぽ探検）',
+    content: '日没が近づいたら（時間11500以降）、座標(95, 63, 44)にある拠点へ帰還する。拠点に到着したら最寄りのチェストに全ての所持品を入れ込み、インベントリを空にする。その後ベッドで就寝する。朝が来たらチェストの中身は一切取らず、所持品が空っぽのまま外の探検へ出発する。'
+  },
+  {
+    id: 'villager_door_gate_behavior',
+    category: 'survival',
+    tags: ['door', 'gate', 'fence_gate', 'trapdoor', 'open', 'close', 'villager', 'ドア', 'フェンス', '柵', 'ゲート', '開閉', '村人'],
+    title: '村人動作によるドアと柵（フェンスゲート）の開閉マナー',
+    content: '移動時に閉まっている木製ドアやフェンスゲート、トラップドアがあれば右クリックで開けて通り抜ける。そして通り抜けた後は必ず後ろを振り返ってドアやフェンスゲートを閉める（村人と同様の動作）。これによりモンスターの拠点侵入を防ぎ、安全を保つ。'
+  },
+  {
+    id: 'obstacle_bypass_navigation',
+    category: 'survival',
+    tags: ['obstacle', 'bypass', 'detour', 'jump', 'parkour', 'dig', '壊さない', '障害物', '迂回', '回り道', 'ジャンプ'],
+    title: '障害物の非破壊・迂回（回り道）ナビゲーション',
+    content: '進路に壁やフェンス、段差などの障害物がある際、すぐにブロックを壊して進むのではなく、ジャンプで乗り越えるか、左右へサイドステップして回り込む（迂回する）ことで、建築物や地形を破壊せずにスマートに進む。'
+  },
+  {
     id: 'craft_torches',
     category: 'survival',
     tags: ['torch', 'coal', 'charcoal', 'light', '松明', '石炭', '木炭', '明かり'],

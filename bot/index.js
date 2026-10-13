@@ -33,6 +33,64 @@ try {
 const brain = new AIBrain();
 const activeBots = {};
 
+// 拠点座標の定義 (ユーザー指定画像 F3: Block 95 63 44 / 看板「拠点」)
+const BASE_COORDINATES = {
+  x: parseFloat(process.env.BASE_X || '95'),
+  y: parseFloat(process.env.BASE_Y || '63'),
+  z: parseFloat(process.env.BASE_Z || '44')
+};
+
+/**
+ * 拠点の位置を特定（看板「拠点」があれば優先、なければ指定座標 95, 63, 44）
+ */
+function findBaseLocation(bot) {
+  const { Vec3 } = require('vec3');
+  try {
+    const signPositions = bot.findBlocks({
+      matching: block => block && block.name && block.name.includes('sign'),
+      maxDistance: 32,
+      count: 8
+    });
+    for (const pos of signPositions) {
+      const signBlock = bot.blockAt(pos);
+      if (signBlock && signBlock.signText && signBlock.signText.includes('拠点')) {
+        return signBlock.position;
+      }
+    }
+  } catch (_) {}
+  return new Vec3(BASE_COORDINATES.x, BASE_COORDINATES.y, BASE_COORDINATES.z);
+}
+
+/**
+ * 対象ブロックが木製ドア・フェンスゲート・トラップドアか判定
+ * （鉄製ドア・鉄製トラップドアは手動開閉できないため除外）
+ */
+function isDoorOrGate(block) {
+  if (!block || !block.name) return false;
+  const n = block.name;
+  if (n.includes('iron_door') || n.includes('iron_trapdoor')) return false;
+  return n.endsWith('_door') || n.endsWith('_fence_gate') || n.endsWith('_trapdoor');
+}
+
+/**
+ * ブロックが開いている（open === true）かを判定
+ */
+function isBlockOpen(block) {
+  if (!block) return false;
+  try {
+    if (typeof block.getProperties === 'function') {
+      const props = block.getProperties();
+      if (props && props.open !== undefined) {
+        return String(props.open) === 'true';
+      }
+    }
+    if (block._properties && block._properties.open !== undefined) {
+      return String(block._properties.open) === 'true';
+    }
+  } catch (_) {}
+  return false;
+}
+
 /**
  * 個別および統合の行動日誌記録
  */
@@ -120,10 +178,17 @@ function getBotEnvironmentalState(bot) {
     if (cursor) lookingAt = cursor.name;
   } catch (e) {}
 
+  const timeOfDay = bot.time ? bot.time.timeOfDay : 0;
+  const isSunsetApproaching = bot.time ? (timeOfDay >= 11500 && timeOfDay < 23000) : false;
+  const isNight = bot.time ? (timeOfDay >= 13000 && timeOfDay <= 23000) : false;
+
   return {
     health: bot.health,
     food: bot.food,
-    isNight: bot.time ? (bot.time.timeOfDay >= 13000 && bot.time.timeOfDay <= 23000) : false,
+    timeOfDay,
+    isSunsetApproaching,
+    isNight,
+    isSleeping: bot.isSleeping || false,
     isInWater: isInWater || isHeadSubmerged,
     isInLava,
     oxygenLevel,
@@ -143,6 +208,7 @@ function startSafetyWatchdog(bot) {
 
   setInterval(() => {
     if (!bot.entity) return;
+    if (bot.isSleeping) return; // 就寝中はベッドで安全に休むため解除しない
     const botPos = bot.entity.position;
     const headBlock = bot.blockAt(botPos.offset(0, 1.6, 0));
     const isHeadInWater = headBlock && (headBlock.name === 'water' || headBlock.name === 'flowing_water');
@@ -201,6 +267,217 @@ function startSafetyWatchdog(bot) {
 }
 
 /**
+ * 村人と同様のドア・柵（フェンスゲート）・トラップドア自動開閉ループ
+ * 1. 進行方向の閉じたドア/ゲートに近づいた際、右クリックで開けて通り抜ける
+ * 2. 通過後、振り返って必ずドア/ゲートを閉める（モンスター侵入防止・村人アクション）
+ */
+function startVillagerDoorLoop(bot) {
+  const openedDoors = new Map(); // posKey -> { block, openedAt, botPosAtOpen }
+  const doorCooldowns = new Map(); // posKey -> lastToggledTime
+  let isToggling = false;
+
+  setInterval(async () => {
+    if (!bot.entity || bot.isSleeping || isToggling) return;
+    const botPos = bot.entity.position;
+    const now = Date.now();
+
+    // 1. 通過後のドア・フェンスゲートを閉める（村人の最重要行動）
+    for (const [posKey, info] of openedDoors.entries()) {
+      const doorPos = info.block.position;
+      const currentBlock = bot.blockAt(doorPos);
+
+      // ブロックが破壊されたか別のブロックになった場合
+      if (!currentBlock || !isDoorOrGate(currentBlock)) {
+        openedDoors.delete(posKey);
+        continue;
+      }
+
+      const dist = botPos.distanceTo(doorPos);
+      const timeSinceOpen = now - info.openedAt;
+
+      // ドアがまだ開いていて、Botが通り抜けて少し離れた（1.3m〜3.2m以内）かつ400ms以上経過
+      if (isBlockOpen(currentBlock)) {
+        if (timeSinceOpen > 400 && dist >= 1.3 && dist <= 3.2) {
+          // 周囲1.2m以内に他のBotやプレイヤーがいないか確認（挟み込み防止）
+          const isAnotherPlayerClose = Object.values(bot.entities).some(e => {
+            if (!e || e === bot.entity) return false;
+            return (e.type === 'player' || e.type === 'mob') && e.position.distanceTo(doorPos) < 1.2;
+          });
+
+          if (!isAnotherPlayerClose) {
+            isToggling = true;
+            try {
+              await bot.lookAt(doorPos.offset(0.5, 0.5, 0.5));
+              await bot.activateBlock(currentBlock);
+              doorCooldowns.set(posKey, now);
+              openedDoors.delete(posKey);
+              console.log(`🚪 [${bot.username}] 通過後に${currentBlock.name}を閉めました（村人アクション）。`);
+              recordDiary(bot.username, '村人ドア閉め', `通過後に${currentBlock.name}を閉めました。`, botPos);
+            } catch (_) {}
+            isToggling = false;
+            return;
+          }
+        }
+      } else {
+        // すでに誰かが閉めた場合
+        openedDoors.delete(posKey);
+      }
+
+      // 10秒以上経過した古い追跡は削除
+      if (timeSinceOpen > 10000) {
+        openedDoors.delete(posKey);
+      }
+    }
+
+    // 2. 進行方向の閉じたドア・フェンスゲートを開ける
+    // 周囲2.5m以内の閉じたドア・ゲートを探索
+    const nearbyDoorPos = bot.findBlocks({
+      matching: block => {
+        if (!isDoorOrGate(block)) return false;
+        return !isBlockOpen(block);
+      },
+      maxDistance: 2.6,
+      count: 3
+    });
+
+    if (nearbyDoorPos.length > 0) {
+      for (const pos of nearbyDoorPos) {
+        const posKey = `${pos.x},${pos.y},${pos.z}`;
+        const lastToggle = doorCooldowns.get(posKey) || 0;
+        if (now - lastToggle < 800) continue; // 連続操作防止
+
+        const doorBlock = bot.blockAt(pos);
+        if (!doorBlock || isBlockOpen(doorBlock)) continue;
+
+        const dist = botPos.distanceTo(pos);
+        if (dist <= 2.4) {
+          isToggling = true;
+          try {
+            await bot.lookAt(pos.offset(0.5, 0.5, 0.5));
+            await bot.activateBlock(doorBlock);
+            doorCooldowns.set(posKey, now);
+            openedDoors.set(posKey, {
+              block: doorBlock,
+              openedAt: now,
+              botPosAtOpen: botPos.clone()
+            });
+            console.log(`🚪 [${bot.username}] 前方の${doorBlock.name}を開けました。`);
+            recordDiary(bot.username, '村人ドア開け', `前方の${doorBlock.name}を開けて通り抜けます。`, botPos);
+          } catch (_) {}
+          isToggling = false;
+          break;
+        }
+      }
+    }
+  }, 250);
+}
+
+/**
+ * 周囲のドア・フェンスゲートを開閉するヘルパー
+ */
+async function toggleNearbyDoors(bot, closeOnly = false) {
+  const nearbyDoorPos = bot.findBlocks({
+    matching: block => isDoorOrGate(block),
+    maxDistance: 4.5,
+    count: 5
+  });
+  if (nearbyDoorPos.length === 0) {
+    bot.chat('周囲にドアやフェンスゲートが見当たりません。');
+    return;
+  }
+  let count = 0;
+  for (const pos of nearbyDoorPos) {
+    const blk = bot.blockAt(pos);
+    if (!blk) continue;
+    const open = isBlockOpen(blk);
+    if (closeOnly && !open) continue; // 閉じる指示で既に閉じているならスキップ
+    try {
+      await bot.lookAt(pos.offset(0.5, 0.5, 0.5));
+      await bot.activateBlock(blk);
+      count++;
+      await new Promise(r => setTimeout(r, 200));
+    } catch (_) {}
+  }
+  if (count > 0) {
+    bot.chat(closeOnly ? 'ドア・フェンスゲートを閉めました！' : 'ドア・フェンスゲートを操作しました！');
+  }
+}
+
+/**
+ * 障害物迂回・スマート脱出ループ (Smart Obstacle Bypass & Detour System)
+ * 進行方向にブロックや段差などの障害物がある際、壊さずに
+ * 「段差のジャンプ乗り越え」「サイドステップによる回り込み」「後退して別ルート再計算」を実行
+ */
+function startSmartObstacleBypassLoop(bot) {
+  let lastPos = null;
+  let stuckCount = 0;
+  let isBypassing = false;
+
+  setInterval(async () => {
+    if (!bot.entity || bot.isSleeping || isBypassing) return;
+    const currentPos = bot.entity.position;
+
+    // パスファインダーが移動中、または移動速度がある場合
+    const isMoving = (bot.pathfinder && bot.pathfinder.isMoving()) ||
+                     (bot.entity.velocity && bot.entity.velocity.norm() > 0.01);
+
+    if (isMoving && lastPos) {
+      const movedDist = currentPos.distanceTo(lastPos);
+
+      // 移動中判定なのに1秒間でほぼ前進していない（障害物に引っかかっている）
+      if (movedDist < 0.12) {
+        stuckCount++;
+      } else {
+        stuckCount = Math.max(0, stuckCount - 1);
+        bot.setControlState('jump', false);
+      }
+
+      // 1.5秒〜2秒以上引っかかった場合（障害物に直面）
+      if (stuckCount >= 3) {
+        stuckCount = 0;
+        isBypassing = true;
+
+        try {
+          const yaw = bot.entity.yaw;
+
+          // 1. まず1ブロックの段差をジャンプで乗り越えられるか試行（壊さずに飛び越える）
+          bot.setControlState('jump', true);
+          await new Promise(r => setTimeout(r, 300));
+          bot.setControlState('jump', false);
+
+          // 2. 依然として進めない場合、左右どちらかにサイドステップして障害物の角を回り込む（迂回）
+          const sideAngle = (Math.random() < 0.5 ? 1 : -1) * (Math.PI / 2);
+          const detourAngle = yaw + sideAngle;
+          const detourX = currentPos.x - Math.sin(detourAngle) * 1.6;
+          const detourZ = currentPos.z + Math.cos(detourAngle) * 1.6;
+
+          console.log(`🔄 [${bot.username}] 障害物を検知。ブロックを壊さず横へ迂回します (${Math.round(detourX)}, ${Math.round(detourZ)})`);
+          recordDiary(bot.username, '障害物迂回', '進路上の障害物を壊さず、横へ回り込んで迂回移動しました。', currentPos);
+
+          // 現在の目標ゴールを保持
+          const currentGoal = bot.pathfinder.goal;
+
+          // 横方向へ短距離迂回
+          bot.pathfinder.setGoal(new goals.GoalNear(detourX, currentPos.y, detourZ, 0.6));
+          await new Promise(r => setTimeout(r, 1000));
+
+          // 元のゴールがあれば再設定（別の経路から再探索）
+          if (currentGoal) {
+            bot.pathfinder.setGoal(currentGoal);
+          }
+        } catch (_) {}
+
+        isBypassing = false;
+      }
+    } else {
+      stuckCount = 0;
+    }
+
+    lastPos = currentPos.clone();
+  }, 500);
+}
+
+/**
  * 1体のAIPlayer Botを作成
  */
 function createBot(personaKey, index) {
@@ -238,7 +515,9 @@ function createBot(personaKey, index) {
     currentAction: 'idle',
     lastChatTime: 0,
     targetBlock: null,
-    busyTimer: null
+    busyTimer: null,
+    routineState: 'day', // 'day' | 'night' | 'sleeping'
+    lastRoutineDay: -1
   };
 
   bot.setBotBusy = function(actionName, timeoutMs = 15000) {
@@ -262,13 +541,39 @@ function createBot(personaKey, index) {
     console.log(`🎉 [${botName}] スポーン完了！ (視線Viewer: http://localhost:${viewerPort})`);
     recordDiary(botName, 'スポーン', `ワールドにスポーンしました。初期挨拶を準備中。`, bot.entity.position);
 
-    // パスファインダー設定 (草や花でフリーズするのを防ぎ、スムーズな踏破を実現)
+    // パスファインダー設定 (障害物を壊さず、迂回・ジャンプ・パルクールでスマートに進む)
     const mcData = require('minecraft-data')(bot.version);
     const defaultMove = new Movements(bot, mcData);
-    defaultMove.canDig = true; // 草・花・ツタなどを壊して通行可能にする（移動不能フリーズの根本防止）
+    defaultMove.canDig = false; // 障害物を壊すことを禁止！迂回路・回り道を最優先で探索
     defaultMove.allowParkour = true; // 1ブロックの段差や溝をジャンプして乗り越える
-    defaultMove.allowSprinting = true; // 追従時にダッシュ
+    defaultMove.allowSprinting = true; // 追従・移動時にダッシュ
     defaultMove.liquidCost = 5; // 溺死やマグマ侵入防止
+    defaultMove.canOpenDoors = true; // 村人と同様のドア・フェンスゲート開閉通行を有効化
+
+    // 草・花・ツタなど当たり判定のないブロックを「壊さずにそのまま通行可能」として登録
+    if (defaultMove.passableBlocks) {
+      Object.values(mcData.blocks).forEach(b => {
+        if (!b || !b.name) return;
+        const n = b.name;
+        if (n.includes('grass') || n.includes('flower') || n.includes('fern') ||
+            n.includes('tulip') || n.includes('rose') || n.includes('daisy') ||
+            n.includes('orchid') || n.includes('allium') || n.includes('dandelion') ||
+            n.includes('vine') || n.includes('hanging_roots') || n.includes('sapling') ||
+            n.includes('carpet') || n === 'torch' || n === 'wall_torch') {
+          defaultMove.passableBlocks.add(b.id);
+        }
+      });
+    }
+
+    // フェンスゲートや木製ドア・トラップドアを開閉・通行可能リストに登録
+    if (defaultMove.doors) {
+      Object.values(mcData.blocks).forEach(b => {
+        if (b && isDoorOrGate(b)) {
+          defaultMove.doors.add(b.id);
+        }
+      });
+    }
+
     // 通常移動時に地面や建築ブロックを不用意に掘り崩さないよう保護
     const protectBlocks = ['dirt', 'grass_block', 'stone', 'deepslate', 'sand', 'gravel', 'bedrock', 'cobblestone', 'oak_planks', 'spruce_planks', 'birch_planks'];
     for (const bName of protectBlocks) {
@@ -304,6 +609,15 @@ function createBot(personaKey, index) {
 
     // 高頻度コンパニオン追従＆アイテム回収ループ (滑らかな人間らしい動作)
     startCompanionLoop(bot);
+
+    // 村人と同様のドア・柵（フェンスゲート）の自動開閉＆通過後閉鎖ループ
+    startVillagerDoorLoop(bot);
+
+    // 障害物非破壊・スマート迂回（回り込み・ジャンプ脱出）ループ
+    startSmartObstacleBypassLoop(bot);
+
+    // 日没・夕暮れ時の拠点帰還＆チェスト全収納＆ベッド就寝、朝の探検出発ルーチン監視
+    startTimeWatcher(bot, personaKey, index);
 
     // 3秒おきの視覚＋知識ベース(RAG)自律意思決定＆高速行動ループ
     setTimeout(() => {
@@ -387,6 +701,35 @@ function createBot(personaKey, index) {
     lastHandledChatTime = now;
 
     console.log(`[Chat Target -> ${botName}] <${username}> ${cleanMessage} (メンション: ${mentionInfo.mentioned}, 一斉: ${mentionInfo.isBroadcast}, 代表: ${isClosestRepresentative})`);
+
+    // 0. 即時チャットコマンドの判定 (LLM推論を待たずに即時実行)
+    const strippedMsg = cleanMessage.replace(/[@＠][a-zA-Z0-9_\u3040-\u30ff\u4e00-\u9faf]+/g, '').trim();
+    if (strippedMsg.startsWith('!drop') || strippedMsg.startsWith('!give')) {
+      const parts = strippedMsg.split(/\s+/);
+      const targetItem = parts[1] || 'all';
+      bot.chat(`所持品をお渡しします！`);
+      recordDiary(botName, 'コマンド実行', `!drop/!giveコマンドによりプレイヤーへアイテム受け渡しを開始。`, bot.entity.position);
+      giveItemsToPlayer(bot, playerEntity, targetItem);
+      return;
+    }
+    if (strippedMsg.startsWith('!base') || strippedMsg.startsWith('!sleep') || strippedMsg.startsWith('!拠点') || strippedMsg.startsWith('!寝て') || strippedMsg.startsWith('!おやすみ')) {
+      bot.chat(`拠点(95, 63, 44)へ戻り、所持品をチェストへ預けて寝ます！`);
+      recordDiary(botName, 'コマンド実行', `!base/!sleepコマンドにより拠点帰還＆チェスト収納＆就寝を開始。`, bot.entity.position);
+      executeNightRoutine(bot, personaKey);
+      return;
+    }
+    if (strippedMsg.startsWith('!explore') || strippedMsg.startsWith('!探検') || strippedMsg.startsWith('!冒険')) {
+      bot.chat(`チェストには触らず、所持品空っぽのまま探検に出発します！`);
+      recordDiary(botName, 'コマンド実行', `!exploreコマンドにより手ぶら探検を開始。`, bot.entity.position);
+      executeMorningRoutine(bot, personaKey);
+      return;
+    }
+    if (strippedMsg.startsWith('!door') || strippedMsg.startsWith('!gate') || strippedMsg.startsWith('!ドア') || strippedMsg.startsWith('!ゲート')) {
+      const isClose = strippedMsg.includes('close') || strippedMsg.includes('閉') || strippedMsg.includes('しめ');
+      bot.chat(isClose ? '周囲のドア・フェンスゲートを閉めます！' : '周囲のドア・フェンスゲートを開閉します！');
+      toggleNearbyDoors(bot, isClose);
+      return;
+    }
 
     // 客観的環境・現在地ステータスのリアルタイム集計 (水没・溶岩・作業台/かまど有無)
     const botState = getBotEnvironmentalState(bot);
@@ -712,11 +1055,443 @@ async function cookFoodAtUtility(bot) {
 }
 
 /**
+ * プレイヤーに近づいて指定アイテム（または全所持品）をドロップして手渡す
+ */
+async function giveItemsToPlayer(bot, targetPlayer, targetItem = 'all') {
+  if (!bot.entity || !bot.inventory) return;
+  const botName = bot.username;
+  if (bot.setBotBusy) bot.setBotBusy('give', 15000);
+
+  try {
+    // プレイヤーが明示されていない場合、最寄りの他プレイヤーを特定
+    let recipient = targetPlayer;
+    if (!recipient || !recipient.position) {
+      recipient = bot.nearestEntity(e => e.type === 'player' && e.username !== bot.username);
+    }
+
+    if (recipient && recipient.position) {
+      // プレイヤーの近く（約2ブロック）まで移動して顔を向ける
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(recipient.position.x, recipient.position.y, recipient.position.z, 2.0));
+        // 到着まで少し待機 (最大2秒)
+        for (let i = 0; i < 10; i++) {
+          if (!bot.entity) break;
+          if (bot.entity.position.distanceTo(recipient.position) <= 2.8) break;
+          await new Promise(r => setTimeout(r, 200));
+        }
+      } catch (_) {}
+
+      try {
+        await bot.lookAt(recipient.position.offset(0, 1.4, 0));
+      } catch (_) {}
+    }
+
+    const allItems = bot.inventory.items();
+    if (!allItems || allItems.length === 0) {
+      bot.chat('渡せるアイテムを持っていません。');
+      if (bot.clearBotBusy) bot.clearBotBusy();
+      return;
+    }
+
+    const filter = (typeof targetItem === 'string' && targetItem !== 'all' && targetItem !== 'null' && targetItem !== '')
+      ? targetItem.toLowerCase()
+      : null;
+
+    const targetItems = allItems.filter(item => {
+      if (!filter) return true;
+      const n = item.name.toLowerCase();
+      if (n.includes(filter)) return true;
+      if (filter.includes('木') || filter.includes('wood') || filter.includes('log')) {
+        return n.includes('log') || n.includes('wood') || n.includes('planks');
+      }
+      if (filter.includes('石') || filter.includes('stone') || filter.includes('cobble')) {
+        return n.includes('stone') || n.includes('cobble');
+      }
+      if (filter.includes('鉄') || filter.includes('iron')) {
+        return n.includes('iron');
+      }
+      if (filter.includes('肉') || filter.includes('food') || filter.includes('食') || filter.includes('飯')) {
+        return n.includes('beef') || n.includes('pork') || n.includes('mutton') || n.includes('chicken') || n.includes('bread') || n.includes('apple') || n.includes('fish');
+      }
+      if (filter.includes('鉱石') || filter.includes('ore')) {
+        return n.includes('ore') || n.includes('raw_') || n.includes('coal') || n.includes('iron') || n.includes('copper') || n.includes('gold') || n.includes('diamond');
+      }
+      return false;
+    });
+
+    if (targetItems.length === 0) {
+      bot.chat(`「${targetItem}」は持っていません。`);
+      if (bot.clearBotBusy) bot.clearBotBusy();
+      return;
+    }
+
+    // 自身が落としたアイテムを直後に再回収しないようクールダウンを設定
+    bot.customState.lastDroppedTime = Date.now();
+
+    let droppedCount = 0;
+    for (const item of targetItems) {
+      try {
+        const current = bot.inventory.items().find(i => i.type === item.type);
+        if (current) {
+          await bot.tossStack(current);
+          droppedCount += current.count;
+          await new Promise(r => setTimeout(r, 150));
+        }
+      } catch (err) {}
+    }
+
+    if (droppedCount > 0) {
+      console.log(`🎁 [${botName}] プレイヤーへアイテム (${droppedCount}個) をドロップしました。`);
+      recordDiary(botName, 'アイテム受け渡し', `プレイヤーへアイテム (${droppedCount}個) をドロップして渡しました。`, bot.entity.position);
+
+      // プレイヤーが足元のアイテムを拾いやすいよう、少し後退
+      if (recipient && recipient.position && bot.entity) {
+        try {
+          const diff = bot.entity.position.minus(recipient.position);
+          diff.y = 0;
+          if (diff.norm() > 0.1) {
+            const backPos = bot.entity.position.plus(diff.normalize().scaled(2.0));
+            bot.pathfinder.setGoal(new goals.GoalNear(backPos.x, backPos.y, backPos.z, 0.5));
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (e) {
+    console.error(`[${botName}] アイテム受け渡し中にエラー:`, e.message);
+  } finally {
+    if (bot.clearBotBusy) bot.clearBotBusy();
+  }
+}
+
+/**
+ * 拠点内の最寄りチェストに全所持品・装備品をすべて収納してインベントリを空にする
+ */
+async function depositAllItemsToChest(bot, basePos) {
+  if (!bot.entity || !bot.inventory) return false;
+  const botName = bot.username;
+  const mcData = require('minecraft-data')(bot.version);
+
+  console.log(`📦 [${botName}] 最寄りのチェストを探索中...`);
+
+  // 1. 装備品（頭・胴・脚・足・オフハンド・メインハンド）をすべて外してインベントリに戻す
+  const equipSlots = ['head', 'torso', 'legs', 'feet', 'off-hand', 'hand'];
+  for (const slot of equipSlots) {
+    try {
+      await bot.unequip(slot);
+      await new Promise(r => setTimeout(r, 100));
+    } catch (_) {}
+  }
+
+  // 2. 拠点周辺（半径16ブロック以内）のチェストを探索
+  const chestBlock = bot.findBlock({
+    matching: [
+      mcData.blocksByName.chest?.id,
+      mcData.blocksByName.trapped_chest?.id,
+      mcData.blocksByName.barrel?.id
+    ].filter(Boolean),
+    maxDistance: 16
+  });
+
+  if (!chestBlock) {
+    console.warn(`⚠️ [${botName}] 拠点付近にチェストが見つかりませんでした。`);
+    recordDiary(botName, 'チェスト探索', '拠点付近にチェストが見つかりませんでした。', bot.entity.position);
+    return false;
+  }
+
+  // 3. チェストに近づく（約1.8ブロック）
+  try {
+    bot.pathfinder.setGoal(new goals.GoalNear(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 1.8));
+    for (let i = 0; i < 20; i++) {
+      if (!bot.entity) break;
+      if (bot.entity.position.distanceTo(chestBlock.position) <= 2.5) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    bot.pathfinder.setGoal(null);
+    await bot.lookAt(chestBlock.position.offset(0.5, 0.5, 0.5));
+  } catch (_) {}
+
+  // 4. チェストを開いてすべての所持品を預ける
+  let chest = null;
+  try {
+    chest = await bot.openContainer(chestBlock);
+  } catch (err) {
+    console.warn(`[${botName}] チェストを開けませんでした:`, err.message);
+    return false;
+  }
+
+  let depositedCount = 0;
+  try {
+    const items = bot.inventory.items();
+    for (const item of items) {
+      try {
+        const currentItem = bot.inventory.items().find(i => i.type === item.type);
+        if (currentItem) {
+          await chest.deposit(currentItem.type, null, currentItem.count);
+          depositedCount += currentItem.count;
+          await new Promise(r => setTimeout(r, 120));
+        }
+      } catch (depErr) {
+        console.warn(`[${botName}] アイテム預け入れスキップ (${item.name}):`, depErr.message);
+      }
+    }
+  } finally {
+    try {
+      chest.close();
+    } catch (_) {}
+  }
+
+  console.log(`✅ [${botName}] チェストへの全アイテム収納完了 (${depositedCount}個)`);
+  recordDiary(botName, 'チェスト収納完了', `最寄りのチェストに全ての所持品 (${depositedCount}個) を収納しました。インベントリを空にしました。`, bot.entity.position);
+  bot.chat('所持品をすべてチェストに預けました！');
+  return true;
+}
+
+/**
+ * 拠点内のベッドを探して就寝可能時刻に就寝
+ */
+async function goToBedAndSleep(bot, basePos, personaKey) {
+  if (!bot.entity) return false;
+  const botName = bot.username;
+
+  console.log(`🛏️ [${botName}] ベッドを探索中...`);
+
+  // 周囲のベッドを検索
+  const bedBlockPositions = bot.findBlocks({
+    matching: block => block && block.name && block.name.endsWith('_bed'),
+    maxDistance: 16,
+    count: 8
+  });
+
+  if (!bedBlockPositions || bedBlockPositions.length === 0) {
+    console.warn(`⚠️ [${botName}] 拠点付近にベッドが見つかりませんでした。拠点内で安全に朝を待ちます。`);
+    recordDiary(botName, '待機', 'ベッドが見当たらないため、拠点内で朝まで警戒待機します。', bot.entity.position);
+    bot.chat('ベッドが見当たらないため、拠点内で見張りをして朝を待ちますね。');
+    return false;
+  }
+
+  // 他のBotがすでに就寝中または接近中のベッドを避けて選択
+  let chosenBedPos = null;
+  for (const bPos of bedBlockPositions) {
+    const isOccupied = Object.values(activeBots).some(otherBot => {
+      if (otherBot === bot || !otherBot.entity) return false;
+      return (otherBot.isSleeping || otherBot.customState?.targetBedPos?.equals?.(bPos)) &&
+        otherBot.entity.position.distanceTo(bPos) < 2.0;
+    });
+    if (!isOccupied) {
+      chosenBedPos = bPos;
+      break;
+    }
+  }
+  if (!chosenBedPos) chosenBedPos = bedBlockPositions[0];
+  bot.customState.targetBedPos = chosenBedPos;
+
+  const bedBlock = bot.blockAt(chosenBedPos);
+
+  // ベッドに接近
+  try {
+    bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.4));
+    for (let i = 0; i < 20; i++) {
+      if (!bot.entity) break;
+      if (bot.entity.position.distanceTo(chosenBedPos) <= 1.8) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+    bot.pathfinder.setGoal(null);
+    await bot.lookAt(chosenBedPos.offset(0.5, 0.5, 0.5));
+  } catch (_) {}
+
+  // 就寝可能時刻（12542 ticks）までベッド横で待機
+  const startWait = Date.now();
+  while (bot.time && (bot.time.timeOfDay < 12542 || bot.time.timeOfDay > 23000) && !bot.isRaining) {
+    if (Date.now() - startWait > 60000) break; // 最大1分待機
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  // 就寝を試みる
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (bot.isSleeping) break;
+    try {
+      await bot.sleep(bedBlock);
+      console.log(`😴 [${botName}] ベッドに入り就寝しました。`);
+      recordDiary(botName, '就寝', '拠点のベッドで眠りにつきました。', bot.entity.position);
+      bot.chat('おやすみなさい…朝まで寝ます。');
+      break;
+    } catch (sleepErr) {
+      console.warn(`[${botName}] 就寝試行 (${attempt + 1}/5):`, sleepErr.message);
+      if (sleepErr.message.includes('monsters')) {
+        // 周囲のモンスターを迎撃
+        const mob = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(bot.entity.position) < 8);
+        if (mob && bot.pvp) {
+          bot.pvp.attack(mob);
+          await new Promise(r => setTimeout(r, 4000));
+        }
+      } else {
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    }
+  }
+
+  return true;
+}
+
+/**
+ * 日没ルーチン:
+ * 1. 拠点(95, 63, 44)へ戻る
+ * 2. 最寄りのチェストに全ての所持品を入れ込む
+ * 3. ベッドで寝る
+ */
+async function executeNightRoutine(bot, personaKey) {
+  const persona = personas[personaKey] || { name: bot.username };
+  const botName = persona.name;
+  if (!bot.entity) return;
+
+  bot.setBotBusy('night_routine', 120000);
+  console.log(`🌇 [${botName}] 日没が近づきました。拠点(95, 63, 44)へ帰還を開始します。`);
+
+  const sunsetQuotes = {
+    Gemini: '日が暮れてきましたね。安全のため、座標(95, 63, 44)の拠点に戻って荷物を整理し、休みましょう。',
+    ChatGPT: '日没が近づいています！拠点に帰還して、集めた物資をチェストに預けてベッドで寝る準備をしますね。',
+    Claude: '夕暮れです。モンスターの活動が活発になる前に拠点へ戻り、所持品をチェストへ納めて就寝しましょう。',
+    Grok: 'おっと、太陽が沈みそうだぜ！拠点に戻って戦利品をチェストにぶち込んで、ベッドでグッスリ眠るぜ！'
+  };
+  bot.chat(sunsetQuotes[personaKey] || '日が沈む前に拠点へ戻り、荷物をチェストに預けて寝ます！');
+  recordDiary(botName, '日没・拠点帰還', '日没が近づいたため、指定座標(95, 63, 44)の拠点へ帰還を開始しました。', bot.entity.position);
+
+  // 1. 拠点へ移動
+  const baseTarget = findBaseLocation(bot);
+  try {
+    bot.pathfinder.setGoal(new goals.GoalNear(baseTarget.x, baseTarget.y, baseTarget.z, 2.5));
+    const arriveStart = Date.now();
+    while (bot.entity && bot.entity.position.distanceTo(baseTarget) > 3.5) {
+      if (Date.now() - arriveStart > 40000) break;
+      await new Promise(r => setTimeout(r, 500));
+    }
+  } catch (err) {
+    console.warn(`[${botName}] 拠点移動注意:`, err.message);
+  }
+
+  // 2. 最寄りのチェストに全ての所持品を入れ込み
+  await depositAllItemsToChest(bot, baseTarget);
+
+  // 3. ベッドで寝る
+  await goToBedAndSleep(bot, baseTarget, personaKey);
+}
+
+/**
+ * 朝のルーチン:
+ * 朝が来たら、チェストの中身を取ることはせず、所持品が空っぽのまま探検する
+ */
+function executeMorningRoutine(bot, personaKey) {
+  const persona = personas[personaKey] || { name: bot.username };
+  const botName = persona.name;
+  if (!bot.entity) return;
+
+  // 起床しているか確認（寝ていたら起こす）
+  if (bot.isSleeping) {
+    try {
+      bot.wake();
+    } catch (_) {}
+  }
+
+  console.log(`🌅 [${botName}] 朝が来ました！所持品は空っぽのまま探検に出発します。`);
+
+  const morningQuotes = {
+    Gemini: 'おはようございます！朝になりましたね。チェストの物は取らず、身軽な状態のまま探検を始めましょう！',
+    ChatGPT: 'おはようございます！夜が明けました。所持品は空っぽのまま、新たな探検に出発します！',
+    Claude: '気持ちの良い朝ですね。チェストの中身はそのままで、手ぶらで周囲の探検へ出かけましょう。',
+    Grok: 'よっしゃ朝だぜ！チェストのアイテムには手を付けず、身一つで大冒険の始まりだ！'
+  };
+
+  bot.chat(morningQuotes[personaKey] || '朝が来ました！チェストには触らず、所持品が空っぽのまま探検に出発します！');
+  recordDiary(botName, '朝の探検出発', '朝を迎えました。チェストのアイテムは取らず、所持品が空っぽのまま周辺の探検に出発しました。', bot.entity.position);
+
+  if (bot.clearBotBusy) bot.clearBotBusy();
+  bot.customState.targetBedPos = null;
+
+  // 拠点から離れる方向（20〜35ブロック先）へ探検出発
+  setTimeout(() => {
+    exploreOutward(bot);
+  }, 1500);
+}
+
+/**
+ * 拠点から離れた外側へ探検移動する
+ */
+function exploreOutward(bot) {
+  if (!bot.entity) return;
+  const baseTarget = findBaseLocation(bot);
+
+  // 拠点から外側へランダムな角度で20〜35ブロック離れた座標を計算
+  const angle = Math.random() * Math.PI * 2;
+  const dist = 22 + Math.random() * 15;
+  const targetX = Math.round(baseTarget.x + Math.cos(angle) * dist);
+  const targetZ = Math.round(baseTarget.z + Math.sin(angle) * dist);
+  const targetY = bot.entity.position.y;
+
+  console.log(`🧭 [${bot.username}] 拠点から探検へ出発: 目標 (${targetX}, ${targetY}, ${targetZ})`);
+  bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 2.0));
+}
+
+/**
+ * 日没と朝の時間をリアルタイム監視するウォッチャー
+ */
+function startTimeWatcher(bot, personaKey, index) {
+  let isExecutingRoutine = false;
+
+  bot.on('time', async () => {
+    if (!bot.entity || !bot.time) return;
+
+    const timeOfDay = bot.time.timeOfDay;
+    const currentDay = Math.floor(bot.time.age / 24000);
+
+    // 1. 日没が近づいた（夕暮れ: 11500 ticks 〜 23000 ticks）
+    const isSunsetApproaching = timeOfDay >= 11500 && timeOfDay < 23000;
+
+    if (isSunsetApproaching && bot.customState.routineState !== 'night' && bot.customState.lastRoutineDay !== currentDay) {
+      if (isExecutingRoutine) return;
+      isExecutingRoutine = true;
+      bot.customState.routineState = 'night';
+      bot.customState.lastRoutineDay = currentDay;
+
+      // 各Botが順番にチェスト・ベッドへ向かうようスタッガー待機
+      const delayMs = index * 2500;
+      setTimeout(async () => {
+        try {
+          await executeNightRoutine(bot, personaKey);
+        } catch (e) {
+          console.error(`[${bot.username}] 夜ルーチン実行エラー:`, e.message);
+        } finally {
+          isExecutingRoutine = false;
+        }
+      }, delayMs);
+    }
+
+    // 2. 朝が来た（日の出後: 0 ticks 〜 11500 ticks）
+    const isMorning = timeOfDay >= 0 && timeOfDay < 11500;
+    if (isMorning && bot.customState.routineState === 'night') {
+      bot.customState.routineState = 'day';
+      executeMorningRoutine(bot, personaKey);
+    }
+  });
+
+  // 起床イベント（ベッドから起きた時）
+  bot.on('wake', () => {
+    console.log(`☀️ [${botName}] 目が覚めました。`);
+    if (bot.customState.routineState === 'night') {
+      bot.customState.routineState = 'day';
+      setTimeout(() => {
+        executeMorningRoutine(bot, personaKey);
+      }, 1000 + index * 1000);
+    }
+  });
+}
+
+/**
  * 高頻度コンパニオンループ (カクつきを解消し、自然な追従・視線・アイテム回収を実現)
  */
 function startCompanionLoop(bot) {
   setInterval(async () => {
-    if (!bot.entity || bot.customState.isBusy) return;
+    if (!bot.entity || bot.customState.isBusy || bot.isSleeping) return;
+    if (bot.customState.currentAction === 'night_routine') return;
     // 自律タスク実行中はプレイヤー追従で上書きしない
     if (bot.customState.currentAction !== 'idle' && bot.customState.currentAction !== 'follow') return;
 
@@ -733,11 +1508,12 @@ function startCompanionLoop(bot) {
         return;
       }
 
-      // 2. プレイヤーから投げられたアイテムや近くのドロップ品を自分から回収
-      const droppedItem = bot.nearestEntity(e => {
+      // 2. プレイヤーから投げられたアイテムや近くのドロップ品を自分から回収 (直近にアイテムを渡した後は6秒間自粛)
+      const canCollect = !bot.customState.lastDroppedTime || (Date.now() - bot.customState.lastDroppedTime > 6000);
+      const droppedItem = canCollect ? bot.nearestEntity(e => {
         const isItem = e.name === 'item' || e.type === 'object';
         return isItem && e.position.distanceTo(botPos) < 5.5;
-      });
+      }) : null;
 
       if (droppedItem) {
         bot.pathfinder.setGoal(new goals.GoalNear(droppedItem.position.x, droppedItem.position.y, droppedItem.position.z, 0.4));
@@ -777,7 +1553,8 @@ function startVisionAutonomousLoop(bot, personaKey) {
 
   // 3秒間隔で視覚と思考をチェック
   setInterval(async () => {
-    if (!bot.entity) return;
+    if (!bot.entity || bot.isSleeping) return;
+    if (bot.customState.currentAction === 'night_routine') return;
 
     // 行動中（移動中・ブロック破壊中・戦闘中）は割り込まず完了を待つ
     if (bot.customState.isBusy && bot.customState.currentAction !== 'idle') {
@@ -831,6 +1608,19 @@ function executeAction(bot, persona, thought, targetPlayer) {
   const botName = persona.name;
 
   switch (action) {
+    case 'return_base':
+      executeNightRoutine(bot, persona.name);
+      break;
+
+    case 'explore_morning':
+      executeMorningRoutine(bot, persona.name);
+      break;
+
+    case 'give':
+      const recipient = targetPlayer || bot.nearestEntity(e => e.type === 'player' && e.username !== bot.username);
+      giveItemsToPlayer(bot, recipient, target);
+      break;
+
     case 'craft':
       if (bot.setBotBusy) bot.setBotBusy('craft', 15000);
       craftSurvivalKit(bot);
