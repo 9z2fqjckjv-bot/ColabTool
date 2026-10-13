@@ -34,12 +34,20 @@ class AIBrain {
    * メンション判定
    */
   isMentioned(message, personaKey, persona) {
-    const lower = message.toLowerCase();
-    // 全体メンション
-    if (lower.includes('@all') || lower.includes('@everyone') || message.includes('みんな') || message.includes('全員')) {
+    const raw = message.trim();
+    const lower = raw.toLowerCase();
+
+    // 全体メンション・集合の判定 (全角半角・カタカナひらがな対応)
+    const broadcastKeywords = [
+      '@all', '@everyone', '@全員', '@みんな', '@bot', '@ai',
+      '＠all', '＠everyone', '＠全員', '＠みんな', '＠bot', '＠ai',
+      'みんな', '全員', '全員集合', '集合', 'お前ら', 'bot達', 'ai達'
+    ];
+    if (broadcastKeywords.some(kw => lower.includes(kw.toLowerCase()))) {
       return { mentioned: true, isBroadcast: true };
     }
-    // 個別メンション
+
+    // 個別メンション判定
     const matches = persona.aliases.some(alias => lower.includes(alias.toLowerCase()));
     return { mentioned: matches, isBroadcast: false };
   }
@@ -99,7 +107,7 @@ ${historyStr}
     const localRes = await this.callLocalLlm(persona, systemPrompt, userMessage);
     if (localRes) return localRes;
 
-    // 3. LLM起動遅延時の動的文脈返答生成エンジン（テンプレート文の完全排除）
+    // 3. LLM起動遅延時やオフライン時の動的コンテキスト返答生成
     return this.generateDynamicFallback(persona, userMessage, botState);
   }
 
@@ -185,10 +193,10 @@ ${historyStr}
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userMessage }
           ],
-          temperature: 0.75,
+          temperature: 0.7,
           max_tokens: 250
         },
-        { timeout: 7000 }
+        { timeout: 12000 }
       );
 
       const content = response.data.choices?.[0]?.message?.content;
@@ -196,7 +204,7 @@ ${historyStr}
         return this.parseJsonResponse(content, persona);
       }
     } catch (err) {
-      // ログ出力のみで上位フォールバックへ流す
+      console.warn(`[Local LLM Warning] ${persona.name}: 推論スキップ (${err.message})`);
     }
     return null;
   }
@@ -214,11 +222,12 @@ ${historyStr}
             }
           ],
           generationConfig: {
-            temperature: 0.75,
-            maxOutputTokens: 250
+            temperature: 0.7,
+            maxOutputTokens: 250,
+            responseMimeType: "application/json"
           }
         },
-        { timeout: 7000 }
+        { timeout: 9000 }
       );
 
       const content = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -226,7 +235,7 @@ ${historyStr}
         return this.parseJsonResponse(content, persona);
       }
     } catch (err) {
-      // エラー時はフォールバック
+      console.warn(`[Gemini API Warning] ${persona.name}: 生成スキップ (${err.message})`);
     }
     return null;
   }
@@ -250,70 +259,93 @@ ${historyStr}
   }
 
   /**
-   * LLM応答待ちやオフライン時でも、テンプレート文ではなく状況に応じた動的発言を生成
+   * LLM応答待ちやオフライン時でも、テンプレート定型文ではなく状況に応じた動的発言を生成
    */
   generateDynamicFallback(persona, userMessage, botState) {
     const key = persona.name;
     const isNight = botState.isNight;
-    const msg = userMessage;
+    const hostile = botState.hostileMobs && botState.hostileMobs.length > 0 ? botState.hostileMobs[0] : null;
+
+    // メンション部分を除去した純粋なメッセージ
+    let cleanMsg = userMessage.replace(/[@＠][a-zA-Z0-9_\u3040-\u30ff\u4e00-\u9faf]+/g, '').trim();
+    if (!cleanMsg) cleanMsg = userMessage.trim();
 
     // ユーザーの意図をキーワード解析
     let action = 'follow';
     let target = null;
-    let reply = '';
+    let actionDesc = '合流して行動を共にします';
 
-    if (msg.includes('クラフト') || msg.includes('作') || msg.includes('作業台') || msg.includes('ツール')) {
+    if (cleanMsg.includes('クラフト') || cleanMsg.includes('作') || cleanMsg.includes('作業台') || cleanMsg.includes('ツール')) {
       action = 'craft';
       target = 'tools';
-    } else if (msg.includes('武器') || msg.includes('装備') || msg.includes('剣') || msg.includes('持っ') || msg.includes('防具')) {
+      actionDesc = '手持ち資材で道具や武器をクラフトします';
+    } else if (cleanMsg.includes('武器') || cleanMsg.includes('装備') || cleanMsg.includes('剣') || cleanMsg.includes('防具') || cleanMsg.includes('着て')) {
       action = 'equip';
       target = 'best';
-    } else if (msg.includes('木') || msg.includes('切') || msg.includes('材')) {
+      actionDesc = '最強の武器と防具を身につけます';
+    } else if (cleanMsg.includes('木') || cleanMsg.includes('伐採') || cleanMsg.includes('きこり') || cleanMsg.includes('木材')) {
       action = 'collect_wood';
       target = 'log';
-    } else if (msg.includes('掘') || msg.includes('石') || msg.includes('鉱')) {
+      actionDesc = '近くの木を伐採して原木を集めます';
+    } else if (cleanMsg.includes('掘') || cleanMsg.includes('石') || cleanMsg.includes('鉱石') || cleanMsg.includes('鉄') || cleanMsg.includes('採掘')) {
       action = 'mine';
       target = 'stone';
-    } else if (msg.includes('敵') || msg.includes('戦') || msg.includes('倒') || msg.includes('ゾンビ')) {
+      actionDesc = '足元や周辺の石・鉱石を採掘します';
+    } else if (cleanMsg.includes('敵') || cleanMsg.includes('戦') || cleanMsg.includes('倒') || cleanMsg.includes('ゾンビ') || cleanMsg.includes('スケルトン') || cleanMsg.includes('モンスター')) {
       action = 'attack';
-      target = 'monster';
-    } else if (msg.includes('待') || msg.includes('止') || msg.includes('ストップ')) {
+      target = hostile || 'monster';
+      actionDesc = hostile ? `${hostile}の討伐に向かいます` : '近くのモンスターを迎撃します';
+    } else if (cleanMsg.includes('待') || cleanMsg.includes('止') || cleanMsg.includes('ストップ') || cleanMsg.includes('ステイ')) {
       action = 'stop';
       target = null;
-    } else if (msg.includes('探索') || msg.includes('行こ') || msg.includes('探')) {
+      actionDesc = 'その場で待機します';
+    } else if (cleanMsg.includes('探索') || cleanMsg.includes('行こ') || cleanMsg.includes('探') || cleanMsg.includes('パトロール')) {
       action = 'explore';
       target = 'area';
+      actionDesc = '周辺の地形と安全を偵察してきます';
+    } else if (cleanMsg.includes('こっち') || cleanMsg.includes('来て') || cleanMsg.includes('ついて') || cleanMsg.includes('集合')) {
+      action = 'follow';
+      target = 'player';
+      actionDesc = 'すぐそちらへ向かいます';
+    } else if (cleanMsg.includes('こんにちは') || cleanMsg.includes('おは') || cleanMsg.includes('よろしく') || cleanMsg.includes('やあ')) {
+      action = 'follow';
+      actionDesc = '挨拶';
     }
 
-    // 性格に応じた動的バリエーション
+    // 状況コメントの生成
+    let envNotice = '';
+    if (hostile) {
+      envNotice = `（近くに${hostile}がいます、気をつけて！）`;
+    } else if (isNight) {
+      envNotice = '（夜なので暗がりを警戒しながら）';
+    }
+
+    let reply = '';
+    // 性格に応じた生き生きとした返答生成
     if (key === 'Gemini') {
-      const lines = [
-        `「${msg}」ですね！喜んでご一緒します、すぐ取り掛かりましょう！`,
-        `了解です！周りの様子も見ながら、みんなで協力して進めますね！`,
-        `お声がけありがとうございます！拠点づくりや作業、全力でサポートします！`
-      ];
-      reply = lines[Math.floor(Math.random() * lines.length)];
+      if (actionDesc === '挨拶') {
+        reply = `こんにちは！今日もよろしくお願いします！何から始めましょうか？`;
+      } else {
+        reply = `「${cleanMsg}」ですね！${envNotice}${actionDesc}ね！`;
+      }
     } else if (key === 'ChatGPT') {
-      const lines = [
-        `ご指示「${msg}」を確認しました。現在の周辺状況を分析し、最適な手順で実行します。`,
-        `承知いたしました。効率を最優先にタスクを開始します。必要物資があればお知らせください。`,
-        `メッセージを受信しました。安全マージンを確保しつつ作業へ移行します。`
-      ];
-      reply = lines[Math.floor(Math.random() * lines.length)];
+      if (actionDesc === '挨拶') {
+        reply = `よろしくお願いします。現在の状況を把握し、サポートの準備を整えています。`;
+      } else {
+        reply = `指示「${cleanMsg}」了解です。${envNotice}優先して${actionDesc}。`;
+      }
     } else if (key === 'Claude') {
-      const lines = [
-        `「${msg}」ですね。周囲の危険に気を配りつつ、安全第一でお手伝いいたします。`,
-        `お任せください。夜間やモンスターの接近にも警戒を怠らず、慎重に進めましょう。`,
-        `承知しました。無理のないペースで、確実に状況を整えてまいります。`
-      ];
-      reply = lines[Math.floor(Math.random() * lines.length)];
+      if (actionDesc === '挨拶') {
+        reply = `お声がけ感謝いたします。安全第一でご一緒させていただきますね。`;
+      } else {
+        reply = `「${cleanMsg}」ですね。${envNotice}安全を確認しつつ${actionDesc}。`;
+      }
     } else { // Grok
-      const lines = [
-        `「${msg}」だな！面白そうじゃねえか、ガンガンやってやろうぜ！`,
-        `おっ、出番か！じっとしてるのにも飽きてたとこだ、一気に片付けるぜ！`,
-        `任せとけって！サバイバルは勢いが大事だ、突撃あるのみ！`
-      ];
-      reply = lines[Math.floor(Math.random() * lines.length)];
+      if (actionDesc === '挨拶') {
+        reply = `よっ！退屈してたところだぜ、ガツガツ冒険しようぜ！`;
+      } else {
+        reply = `「${cleanMsg}」だな！面白そうだ、${envNotice}一気に${actionDesc}ぜ！`;
+      }
     }
 
     return { reply, action, target };

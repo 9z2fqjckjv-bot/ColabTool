@@ -89,7 +89,24 @@ function createBot(personaKey, index) {
     isBusy: false,
     currentAction: 'idle',
     lastChatTime: 0,
-    targetBlock: null
+    targetBlock: null,
+    busyTimer: null
+  };
+
+  bot.setBotBusy = function(actionName, timeoutMs = 15000) {
+    bot.customState.isBusy = true;
+    bot.customState.currentAction = actionName;
+    if (bot.customState.busyTimer) clearTimeout(bot.customState.busyTimer);
+    bot.customState.busyTimer = setTimeout(() => {
+      bot.customState.isBusy = false;
+      bot.customState.currentAction = 'idle';
+    }, timeoutMs);
+  };
+
+  bot.clearBotBusy = function() {
+    bot.customState.isBusy = false;
+    bot.customState.currentAction = 'idle';
+    if (bot.customState.busyTimer) clearTimeout(bot.customState.busyTimer);
   };
 
   // スポーンイベント
@@ -97,13 +114,19 @@ function createBot(personaKey, index) {
     console.log(`🎉 [${botName}] スポーン完了！ (視線Viewer: http://localhost:${viewerPort})`);
     recordDiary(botName, 'スポーン', `ワールドにスポーンしました。初期挨拶を準備中。`, bot.entity.position);
 
-    // パスファインダー設定 (カクつきを防ぎ、スムーズな追従とパルクール移動を実現)
+    // パスファインダー設定 (草や花でフリーズするのを防ぎ、スムーズな踏破を実現)
     const mcData = require('minecraft-data')(bot.version);
     const defaultMove = new Movements(bot, mcData);
-    defaultMove.canDig = false; // 通常移動中に地面を勝手に掘ってカクつくのを防止
-    defaultMove.allowParkour = true; // 1ブロックの溝や段差をスムーズに飛び越える
-    defaultMove.allowSprinting = true; // プレイヤーから離れたらダッシュでスムーズに追従
-    defaultMove.liquidCost = 5; // 溺死やマグマダイブを防止
+    defaultMove.canDig = true; // 草・花・ツタなどを壊して通行可能にする（移動不能フリーズの根本防止）
+    defaultMove.allowParkour = true; // 1ブロックの段差や溝をジャンプして乗り越える
+    defaultMove.allowSprinting = true; // 追従時にダッシュ
+    defaultMove.liquidCost = 5; // 溺死やマグマ侵入防止
+    // 通常移動時に地面や建築ブロックを不用意に掘り崩さないよう保護
+    const protectBlocks = ['dirt', 'grass_block', 'stone', 'deepslate', 'sand', 'gravel', 'bedrock', 'cobblestone', 'oak_planks', 'spruce_planks', 'birch_planks'];
+    for (const bName of protectBlocks) {
+      const b = mcData.blocksByName[bName];
+      if (b) defaultMove.blocksCantBreak.add(b.id);
+    }
     bot.pathfinder.setMovements(defaultMove);
 
     // 視線 (First-Person POV) Prismarine-Viewer 起動
@@ -158,57 +181,103 @@ function createBot(personaKey, index) {
     }
   });
 
-  // チャット受信イベント (メンション・声掛け対応)
-  bot.on('chat', async (username, message) => {
+  // チャット処理の共通ロジック (chatイベント & messagestrイベント両対応)
+  let lastHandledChatMsg = '';
+  let lastHandledChatTime = 0;
+
+  const handleIncomingChat = async (username, message) => {
+    if (!message || typeof message !== 'string') return;
+    const cleanMessage = message.trim();
+    if (!cleanMessage) return;
+
     // 自身の発言、または他のBotの発言ならスキップ
     if (username === bot.username || Object.keys(personas).some(k => personas[k].name === username)) {
       return;
     }
 
-    const mentionInfo = brain.isMentioned(message, personaKey, persona);
+    // 重複チャット処理防止 (直近1秒の完全一致)
+    const now = Date.now();
+    if (cleanMessage === lastHandledChatMsg && now - lastHandledChatTime < 1000) {
+      return;
+    }
+
+    const mentionInfo = brain.isMentioned(cleanMessage, personaKey, persona);
     const playerEntity = bot.players[username]?.entity;
     const botPos = bot.entity ? bot.entity.position : { x: 0, y: 0, z: 0 };
     const playerPos = playerEntity ? playerEntity.position : botPos;
     const distanceToPlayer = playerEntity && bot.entity ? bot.entity.position.distanceTo(playerEntity.position) : 999;
 
-    // 自分宛てのメンション、または全体メンション、または至近距離(8ブロック以内)での声掛けに対応
-    const shouldRespond =
-      mentionInfo.mentioned ||
-      (!message.includes('@') && !message.includes('ジェミニ') && !message.includes('チャット') && !message.includes('クロード') && !message.includes('グロック') && distanceToPlayer < 8);
-
-    if (shouldRespond) {
-      console.log(`[Chat Target -> ${botName}] <${username}> ${message}`);
-
-      // 周囲状況の集計
-      const hostileMobs = Object.values(bot.entities)
-        .filter(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 18)
-        .map(e => e.name);
-
-      const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
-
-      const botState = {
-        health: bot.health,
-        food: bot.food,
-        isNight: bot.time ? (bot.time.timeOfDay >= 13000 && bot.time.timeOfDay <= 23000) : false,
-        hostileMobs,
-        inventoryItems
-      };
-
-      // 全体発言時は発言順が重ならないようスタッガー
-      const delayMs = mentionInfo.isBroadcast ? (index * 1500) : 300;
-      setTimeout(async () => {
-        try {
-          const thought = await brain.thinkChat(persona, message, playerPos, botPos, botState);
-          if (thought && thought.reply) {
-            bot.chat(thought.reply);
-            brain.addHistory(botName, thought.reply);
-            recordDiary(botName, '対話・指示受信', `プレイヤー「${message}」へ返答: "${thought.reply}" (行動: ${thought.action})`, bot.entity.position);
+    // メンションがない場合、24ブロック以内のプレイヤーに対して「最も近いBot」が代表で応答
+    let isClosestRepresentative = false;
+    if (!mentionInfo.mentioned && !mentionInfo.isBroadcast && distanceToPlayer < 24) {
+      let closestKey = null;
+      let minDistance = 9999;
+      for (const [k, b] of Object.entries(activeBots)) {
+        if (b && b.entity && playerEntity) {
+          const d = b.entity.position.distanceTo(playerEntity.position);
+          if (d < minDistance) {
+            minDistance = d;
+            closestKey = k;
           }
-          executeAction(bot, persona, thought, playerEntity);
-        } catch (err) {
-          console.error(`[${botName}] チャット処理エラー:`, err.message);
         }
-      }, delayMs);
+      }
+      if (closestKey === personaKey) {
+        isClosestRepresentative = true;
+      }
+    }
+
+    const shouldRespond = mentionInfo.mentioned || mentionInfo.isBroadcast || isClosestRepresentative;
+    if (!shouldRespond) return;
+
+    lastHandledChatMsg = cleanMessage;
+    lastHandledChatTime = now;
+
+    console.log(`[Chat Target -> ${botName}] <${username}> ${cleanMessage} (メンション: ${mentionInfo.mentioned}, 一斉: ${mentionInfo.isBroadcast}, 代表: ${isClosestRepresentative})`);
+
+    // 周囲状況の集計
+    const hostileMobs = Object.values(bot.entities)
+      .filter(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 18)
+      .map(e => e.name);
+
+    const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
+
+    const botState = {
+      health: bot.health,
+      food: bot.food,
+      isNight: bot.time ? (bot.time.timeOfDay >= 13000 && bot.time.timeOfDay <= 23000) : false,
+      hostileMobs,
+      inventoryItems
+    };
+
+    // 全体発言時は発言順が重ならないようスタッガー (300ms〜)
+    const delayMs = mentionInfo.isBroadcast ? (index * 1400 + 200) : 250;
+    setTimeout(async () => {
+      try {
+        const thought = await brain.thinkChat(persona, cleanMessage, playerPos, botPos, botState);
+        if (thought && thought.reply) {
+          bot.chat(thought.reply);
+          brain.addHistory(botName, thought.reply);
+          recordDiary(botName, '対話・指示受信', `プレイヤー「${cleanMessage}」へ返答: "${thought.reply}" (行動: ${thought.action})`, bot.entity.position);
+        }
+        executeAction(bot, persona, thought, playerEntity);
+      } catch (err) {
+        console.error(`[${botName}] チャット処理エラー:`, err.message);
+      }
+    }, delayMs);
+  };
+
+  // 標準チャットイベント
+  bot.on('chat', (username, message) => {
+    handleIncomingChat(username, message);
+  });
+
+  // Paper/Spigot環境でのチャットプラグイン対策 (messagestr フォールバック)
+  bot.on('messagestr', (msgStr) => {
+    if (!msgStr) return;
+    // <PlayerName> message または PlayerName: message を抽出
+    const match = msgStr.match(/^<([^>]+)>\s*(.*)$/) || msgStr.match(/^([a-zA-Z0-9_]{3,16}):\s*(.*)$/);
+    if (match) {
+      handleIncomingChat(match[1], match[2]);
     }
   });
 
@@ -431,7 +500,7 @@ async function craftSurvivalKit(bot) {
   } catch (err) {
     console.warn(`[${botName}] クラフト処理一部スキップ:`, err.message);
   } finally {
-    bot.customState.isBusy = false;
+    if (bot.clearBotBusy) bot.clearBotBusy();
   }
 }
 
@@ -441,6 +510,8 @@ async function craftSurvivalKit(bot) {
 function startCompanionLoop(bot) {
   setInterval(async () => {
     if (!bot.entity || bot.customState.isBusy) return;
+    // 自律タスク実行中はプレイヤー追従で上書きしない
+    if (bot.customState.currentAction !== 'idle' && bot.customState.currentAction !== 'follow') return;
 
     try {
       const botPos = bot.entity.position;
@@ -470,16 +541,16 @@ function startCompanionLoop(bot) {
       const player = bot.nearestEntity(e => e.type === 'player' && e.username !== bot.username);
       if (player) {
         const dist = botPos.distanceTo(player.position);
-        if (dist > 5.5) {
+        if (dist > 6.0) {
           // 少し離れたら自然にダッシュ/歩行で合流
           bot.pathfinder.setGoal(new goals.GoalFollow(player, 2.5), false);
         } else if (dist <= 2.8) {
-          // 追いついたら立ち止まって見守る
+          // 追いついたら立ち止まって見守る (頻繁なクリアを避けて安定化)
           if (bot.pathfinder.isMoving()) {
             bot.pathfinder.setGoal(null);
           }
           // ときどきプレイヤーへ自然に顔を向ける
-          if (Math.random() < 0.4) {
+          if (Math.random() < 0.3) {
             bot.lookAt(player.position.offset(0, 1.6, 0));
           }
         }
@@ -497,6 +568,7 @@ function startAutonomousLoop(bot, personaKey) {
 
   setInterval(async () => {
     if (!bot.entity || bot.customState.isBusy) return;
+    if (bot.customState.currentAction !== 'idle') return;
 
     try {
       const botPos = bot.entity.position;
@@ -536,6 +608,7 @@ function executeAction(bot, persona, thought, targetPlayer) {
 
   switch (action) {
     case 'craft':
+      if (bot.setBotBusy) bot.setBotBusy('craft', 15000);
       craftSurvivalKit(bot);
       break;
 
@@ -546,9 +619,8 @@ function executeAction(bot, persona, thought, targetPlayer) {
     case 'follow':
       const playerToFollow = targetPlayer || bot.nearestEntity(e => e.type === 'player' && e.username !== bot.username);
       if (playerToFollow) {
-        bot.customState.isBusy = true;
+        if (bot.setBotBusy) bot.setBotBusy('follow', 10000);
         bot.pathfinder.setGoal(new goals.GoalFollow(playerToFollow, 2.5), true);
-        setTimeout(() => { bot.customState.isBusy = false; }, 8000);
       }
       break;
 
@@ -564,18 +636,19 @@ function executeAction(bot, persona, thought, targetPlayer) {
       if (logBlocks.length > 0) {
         const targetBlock = bot.blockAt(logBlocks[0]);
         if (targetBlock && bot.collectBlock) {
-          bot.customState.isBusy = true;
+          if (bot.setBotBusy) bot.setBotBusy('collect_wood', 15000);
           console.log(`[${botName}] 木の伐採を開始: ${targetBlock.name}`);
           bot.collectBlock.collect(targetBlock, err => {
-            bot.customState.isBusy = false;
+            if (bot.clearBotBusy) bot.clearBotBusy();
             if (!err) {
               recordDiary(botName, '伐採完了', `原木「${targetBlock.name}」の伐採に成功しました。クラフトを試みます。`, bot.entity.position);
               // 伐採できたら直ちにクラフトと装備を試みる
-              setTimeout(() => { craftSurvivalKit(bot); }, 1000);
+              setTimeout(() => { craftSurvivalKit(bot); }, 800);
             }
           });
         }
       } else {
+        if (bot.setBotBusy) bot.setBotBusy('explore', 8000);
         wanderNear(bot);
       }
       break;
@@ -590,13 +663,14 @@ function executeAction(bot, persona, thought, targetPlayer) {
       if (stoneBlocks.length > 0) {
         const blk = bot.blockAt(stoneBlocks[0]);
         if (blk && bot.collectBlock) {
-          bot.customState.isBusy = true;
+          if (bot.setBotBusy) bot.setBotBusy('mine', 15000);
           bot.collectBlock.collect(blk, () => {
-            bot.customState.isBusy = false;
+            if (bot.clearBotBusy) bot.clearBotBusy();
             autoEquipAll(bot, 'combat');
           });
         }
       } else {
+        if (bot.setBotBusy) bot.setBotBusy('explore', 8000);
         wanderNear(bot);
       }
       break;
@@ -606,19 +680,21 @@ function executeAction(bot, persona, thought, targetPlayer) {
       const hostile = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(bot.entity.position) < 16);
       if (hostile && bot.pvp) {
         console.log(`[${botName}] 敵対モブと戦闘開始: ${hostile.name}`);
+        if (bot.setBotBusy) bot.setBotBusy('attack', 12000);
         bot.pvp.attack(hostile);
         recordDiary(botName, '戦闘', `武器を構えてモンスター「${hostile.name}」を迎撃中。`, bot.entity.position);
       }
       break;
 
     case 'explore':
+      if (bot.setBotBusy) bot.setBotBusy('explore', 8000);
       wanderNear(bot);
       break;
 
     case 'stop':
+      if (bot.clearBotBusy) bot.clearBotBusy();
       bot.pathfinder.setGoal(null);
       if (bot.pvp) bot.pvp.stop();
-      bot.customState.isBusy = false;
       break;
 
     default:
