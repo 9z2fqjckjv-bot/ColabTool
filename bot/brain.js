@@ -63,12 +63,14 @@ class AIBrain {
 ${persona.systemPrompt}
 あなたは「${persona.name}」として、プレイヤーのチャットに応答し、ゲーム内でどう行動するかを決定します。
 
-【現在の状況】
+【現在の状況・環境】
 - あなたの位置: X:${Math.round(botPos.x)}, Y:${Math.round(botPos.y)}, Z:${Math.round(botPos.z)}
 - プレイヤーの位置: X:${Math.round(playerPos.x)}, Y:${Math.round(playerPos.y)}, Z:${Math.round(playerPos.z)}
 - あなたのHP: ${botState.health || 20}/20, 空腹度: ${botState.food || 20}/20
+- 現在の状態: ${botState.isInWater ? '⚠️ 水没中 (息継ぎ・浮上必要)' : botState.isInLava ? '🚨 溶岩に接触 (緊急退避必要)' : '陸上 (安全)'}
+- 酸素残量: ${botState.oxygenLevel || 20}/20
+- 周囲の設備: ${botState.nearbyUtilities?.join(', ') || 'なし (持ち運び作業台を使用)'}
 - 周囲の敵対モブ: ${botState.hostileMobs?.join(', ') || 'なし'}
-- 周囲のアイテム/ブロック: ${botState.nearbyBlocks?.join(', ') || '木や石'}
 - 時間帯: ${botState.isNight ? '夜 (危険)' : '昼 (安全)'}
 
 【直近の会話履歴】
@@ -77,12 +79,14 @@ ${historyStr}
 【あなたの行動選択肢 (action)】
 - "chat": 会話・情報共有
 - "follow": プレイヤーについていく、合流する
-- "craft": 手持ち資材から武器・道具・作業台をクラフトする
+- "craft": 作業台（既存または自作）でツール・防具をクラフトする
+- "cook": 近くのかまどや焚き火で肉を焼く・精錬する
 - "equip": 最適な武器や防具を装備する
 - "collect_wood": 近くの木を伐採して原木を集める
 - "mine": 近くの石や鉱石を掘る
 - "attack": 近くのモンスターを迎撃・討伐する
 - "explore": 付近を偵察・巡回する
+- "escape_water": 水から陸地へ素早く上がる
 - "stop": 現在の行動を中断してその場で待機する
 
 【絶対遵守のルール】
@@ -307,6 +311,10 @@ ${historyStr}
       action = 'follow';
       target = 'player';
       actionDesc = 'すぐそちらへ向かいます';
+    } else if (cleanMsg.includes('肉') || cleanMsg.includes('焼') || cleanMsg.includes('かまど') || cleanMsg.includes('焚き火') || cleanMsg.includes('料理')) {
+      action = 'cook';
+      target = 'food';
+      actionDesc = '近くのかまどや焚き火で肉を焼いて食料を準備します';
     } else if (cleanMsg.includes('こんにちは') || cleanMsg.includes('おは') || cleanMsg.includes('よろしく') || cleanMsg.includes('やあ')) {
       action = 'follow';
       actionDesc = '挨拶';
@@ -314,7 +322,11 @@ ${historyStr}
 
     // 状況コメントの生成
     let envNotice = '';
-    if (hostile) {
+    if (botState.isInWater) {
+      envNotice = '（水に浸かっているので急いで息継ぎしながら）';
+    } else if (botState.isInLava) {
+      envNotice = '（溶岩から緊急退避しながら）';
+    } else if (hostile) {
       envNotice = `（近くに${hostile}がいます、気をつけて！）`;
     } else if (isNight) {
       envNotice = '（夜なので暗がりを警戒しながら）';

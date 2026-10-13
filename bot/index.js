@@ -62,6 +62,124 @@ function recordDiary(botName, actionType, detail, pos = null) {
 }
 
 /**
+ * Botの現在地・環境・周辺設備を客観的・リアルタイムに集計
+ */
+function getBotEnvironmentalState(bot) {
+  const botPos = bot.entity ? bot.entity.position : { x: 0, y: 0, z: 0 };
+  const mcData = require('minecraft-data')(bot.version);
+
+  // 1. 水没・溶岩・窒息の客観的ステータス
+  const headBlock = bot.blockAt(botPos.offset(0, 1.6, 0));
+  const isInWater = bot.entity ? bot.entity.isInWater : false;
+  const isInLava = bot.entity ? bot.entity.isInLava : false;
+  const isHeadSubmerged = headBlock ? (headBlock.name === 'water' || headBlock.name === 'flowing_water') : false;
+  const oxygenLevel = bot.oxygenLevel !== undefined ? bot.oxygenLevel : 20;
+
+  // 2. 敵対モブ
+  const hostileMobs = Object.values(bot.entities)
+    .filter(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 18)
+    .map(e => e.name);
+
+  // 3. インベントリ
+  const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
+
+  // 4. 周囲の既存設備（作業台・かまど・焚き火）の高速検出
+  const nearbyUtilities = [];
+  const utilityTargetIds = [];
+  ['crafting_table', 'furnace', 'blast_furnace', 'smoker', 'campfire', 'soul_campfire'].forEach(name => {
+    const b = mcData.blocksByName[name];
+    if (b) utilityTargetIds.push(b.id);
+  });
+
+  const foundBlocks = bot.findBlocks({
+    matching: utilityTargetIds,
+    maxDistance: 16,
+    count: 3
+  });
+
+  for (const pos of foundBlocks) {
+    const blk = bot.blockAt(pos);
+    if (blk) {
+      const dist = Math.round(botPos.distanceTo(pos));
+      nearbyUtilities.push(`${blk.name}(${dist}m)`);
+    }
+  }
+
+  return {
+    health: bot.health,
+    food: bot.food,
+    isNight: bot.time ? (bot.time.timeOfDay >= 13000 && bot.time.timeOfDay <= 23000) : false,
+    isInWater: isInWater || isHeadSubmerged,
+    isInLava,
+    oxygenLevel,
+    nearbyUtilities,
+    hostileMobs,
+    inventoryItems
+  };
+}
+
+/**
+ * 緊急自衛ループ (客観的現在地検知: 水没・溺死・溶岩・窒息からの超高速自動退避)
+ * 250ms間隔で監視し、LLM思考に関係なく反射的に生命を保護
+ */
+function startSafetyWatchdog(bot) {
+  let isEscapingWater = false;
+
+  setInterval(() => {
+    if (!bot.entity) return;
+    const botPos = bot.entity.position;
+    const headBlock = bot.blockAt(botPos.offset(0, 1.6, 0));
+    const isHeadInWater = headBlock && (headBlock.name === 'water' || headBlock.name === 'flowing_water');
+    const isInWater = bot.entity.isInWater || isHeadInWater;
+    const oxygen = bot.oxygenLevel !== undefined ? bot.oxygenLevel : 20;
+
+    // A. 溶岩接触時: 最優先で緊急脱出
+    if (bot.entity.isInLava) {
+      console.warn(`🚨 [${bot.username}] 溶岩に接触！緊急退避中！`);
+      bot.setControlState('jump', true);
+      bot.setControlState('sprint', true);
+      wanderNear(bot);
+      return;
+    }
+
+    // B. 水没・溺死の危機
+    if (isInWater) {
+      // 1. まず息継ぎのため水面へ素早く浮上 (ジャンプ制御)
+      bot.setControlState('jump', true);
+
+      // 2. 酸素が低下しているか、潜水中の場合、最寄りの安全な乾燥陸地へダッシュ
+      if (oxygen < 19 || isHeadInWater) {
+        if (!isEscapingWater) {
+          isEscapingWater = true;
+          // 最寄りの非水ブロック（土・石・砂など）を探索
+          const landBlockPos = bot.findBlock({
+            matching: block => {
+              if (block.name.includes('water') || block.name === 'air') return false;
+              const above = bot.blockAt(block.position.offset(0, 1, 0));
+              const above2 = bot.blockAt(block.position.offset(0, 2, 0));
+              return above && above.name === 'air' && above2 && above2.name === 'air';
+            },
+            maxDistance: 16
+          });
+
+          if (landBlockPos) {
+            console.log(`🏊 [${bot.username}] 水没を検知: 陸地(${landBlockPos.position.x}, ${landBlockPos.position.y}, ${landBlockPos.position.z})へ脱出します！`);
+            bot.pathfinder.setGoal(new goals.GoalNear(landBlockPos.position.x, landBlockPos.position.y + 1, landBlockPos.position.z, 0.5));
+          }
+        }
+      }
+    } else {
+      // 陸上に上がったらジャンプ解除 & 脱出フラグ解除
+      if (isEscapingWater) {
+        isEscapingWater = false;
+        console.log(`✅ [${bot.username}] 陸上への脱出に成功しました。`);
+      }
+      bot.setControlState('jump', false);
+    }
+  }, 250);
+}
+
+/**
  * 1体のAIPlayer Botを作成
  */
 function createBot(personaKey, index) {
@@ -147,6 +265,9 @@ function createBot(personaKey, index) {
       // 初回装備チェック
       autoEquipAll(bot, 'idle');
     }, (index + 1) * 2500);
+
+    // 緊急自衛ループ (水没・溺死・溶岩からの250ms反射的超高速脱出)
+    startSafetyWatchdog(bot);
 
     // 高頻度コンパニオン追従＆アイテム回収ループ (滑らかな人間らしい動作)
     startCompanionLoop(bot);
@@ -234,20 +355,8 @@ function createBot(personaKey, index) {
 
     console.log(`[Chat Target -> ${botName}] <${username}> ${cleanMessage} (メンション: ${mentionInfo.mentioned}, 一斉: ${mentionInfo.isBroadcast}, 代表: ${isClosestRepresentative})`);
 
-    // 周囲状況の集計
-    const hostileMobs = Object.values(bot.entities)
-      .filter(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 18)
-      .map(e => e.name);
-
-    const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
-
-    const botState = {
-      health: bot.health,
-      food: bot.food,
-      isNight: bot.time ? (bot.time.timeOfDay >= 13000 && bot.time.timeOfDay <= 23000) : false,
-      hostileMobs,
-      inventoryItems
-    };
+    // 客観的環境・現在地ステータスのリアルタイム集計 (水没・溶岩・作業台/かまど有無)
+    const botState = getBotEnvironmentalState(bot);
 
     // 全体発言時は発言順が重ならないようスタッガー (300ms〜)
     const delayMs = mentionInfo.isBroadcast ? (index * 1400 + 200) : 250;
@@ -453,15 +562,18 @@ async function craftSurvivalKit(bot) {
         }
       }
 
-      // 作業台を設置して武器やツルハシをクラフト
-      const tableItemInInv = bot.inventory.items().find(i => i.name === 'crafting_table');
+      // 1. 周囲16ブロック以内の既存の作業台を最優先で探索して活用
       let tableBlock = bot.findBlock({
         matching: mcData.blocksByName.crafting_table.id,
-        maxDistance: 4
+        maxDistance: 16
       });
 
-      if (!tableBlock && tableItemInInv) {
-        // 足元付近の設置可能な面を探す
+      if (tableBlock) {
+        console.log(`[${botName}] 周囲の既存作業台を発見！移動して使用します: X:${tableBlock.position.x}, Y:${tableBlock.position.y}, Z:${tableBlock.position.z}`);
+        bot.pathfinder.setGoal(new goals.GoalNear(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 2));
+        await new Promise(r => setTimeout(r, 1200));
+      } else if (tableItemInInv) {
+        // 既存のものがなければ足元付近の設置可能な面を探して設置
         const groundBlock = bot.blockAt(bot.entity.position.offset(1, -1, 0)) || bot.blockAt(bot.entity.position.offset(0, -1, 1));
         if (groundBlock && groundBlock.name !== 'air') {
           try {
@@ -476,7 +588,7 @@ async function craftSurvivalKit(bot) {
       }
 
       if (tableBlock) {
-        // 木の剣のクラフト
+        // 木の剣のクラフト (レシピ本展開)
         const swordItem = mcData.itemsByName.wooden_sword;
         const swordRecipes = bot.recipesFor(swordItem.id, null, 1, tableBlock);
         if (swordRecipes.length > 0) {
@@ -495,12 +607,74 @@ async function craftSurvivalKit(bot) {
 
       // クラフトした武器・ツールを即時装備！
       await autoEquipAll(bot, 'combat');
-      recordDiary(botName, 'クラフト完了', `原木から木材・棒・作業台を作成し、自給自足で木の剣とツルハシをクラフト・装備しました！`, bot.entity.position);
+      recordDiary(botName, 'クラフト完了', `作業台を活用して木の剣とツルハシをクラフト・装備しました！`, bot.entity.position);
     }
   } catch (err) {
     console.warn(`[${botName}] クラフト処理一部スキップ:`, err.message);
   } finally {
     if (bot.clearBotBusy) bot.clearBotBusy();
+  }
+}
+
+/**
+ * 既存のかまど・焚き火を利用した調理・精錬
+ */
+async function cookFoodAtUtility(bot) {
+  if (!bot.inventory) return;
+  const mcData = require('minecraft-data')(bot.version);
+  const botName = bot.username;
+  const items = bot.inventory.items();
+
+  // 生肉や調理可能アイテムのチェック
+  const rawFoods = items.filter(i => 
+    i.name.includes('raw_') || i.name === 'beef' || i.name === 'porkchop' || i.name === 'chicken' || i.name === 'mutton' || i.name === 'cod' || i.name === 'salmon' || i.name === 'potato'
+  );
+  if (rawFoods.length === 0) return;
+
+  // 1. 焚き火 (campfire / soul_campfire) の検索
+  const campfireBlock = bot.findBlock({
+    matching: [mcData.blocksByName.campfire?.id, mcData.blocksByName.soul_campfire?.id].filter(Boolean),
+    maxDistance: 16
+  });
+
+  if (campfireBlock) {
+    console.log(`[${botName}] 近くの焚き火を発見！生肉を調理します。`);
+    if (bot.setBotBusy) bot.setBotBusy('cook', 10000);
+    bot.pathfinder.setGoal(new goals.GoalNear(campfireBlock.position.x, campfireBlock.position.y, campfireBlock.position.z, 2));
+    setTimeout(async () => {
+      try {
+        await bot.equip(rawFoods[0], 'hand');
+        await bot.activateBlock(campfireBlock);
+        recordDiary(botName, '調理', `焚き火に「${rawFoods[0].name}」を置いて調理を開始しました。`, bot.entity.position);
+      } catch (e) {}
+      if (bot.clearBotBusy) bot.clearBotBusy();
+    }, 2000);
+    return;
+  }
+
+  // 2. かまど (furnace / smoker / blast_furnace) の検索
+  const furnaceBlock = bot.findBlock({
+    matching: [mcData.blocksByName.furnace?.id, mcData.blocksByName.smoker?.id, mcData.blocksByName.blast_furnace?.id].filter(Boolean),
+    maxDistance: 16
+  });
+
+  if (furnaceBlock) {
+    console.log(`[${botName}] 近くのかまどを発見！精錬・調理を試みます。`);
+    if (bot.setBotBusy) bot.setBotBusy('cook', 15000);
+    bot.pathfinder.setGoal(new goals.GoalNear(furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 2));
+    setTimeout(async () => {
+      try {
+        const furnace = await bot.openFurnace(furnaceBlock);
+        const fuels = bot.inventory.items().filter(i => i.name.includes('coal') || i.name.includes('charcoal') || i.name.includes('_planks') || i.name.includes('_log'));
+        if (fuels.length > 0) {
+          await furnace.putFuel(fuels[0].type, null, 1);
+        }
+        await furnace.putInput(rawFoods[0].type, null, Math.min(rawFoods[0].count, 4));
+        recordDiary(botName, '精錬・調理', `かまどに「${rawFoods[0].name}」と燃料を投入しました。`, bot.entity.position);
+        furnace.close();
+      } catch (e) {}
+      if (bot.clearBotBusy) bot.clearBotBusy();
+    }, 2000);
   }
 }
 
@@ -572,20 +746,7 @@ function startAutonomousLoop(bot, personaKey) {
 
     try {
       const botPos = bot.entity.position;
-      const isNight = bot.time ? (bot.time.timeOfDay >= 13000 && bot.time.timeOfDay <= 23000) : false;
-
-      // 周囲の敵対モブを検出
-      const hostileEntity = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 14);
-
-      const inventoryItems = bot.inventory ? bot.inventory.items().map(i => i.name) : [];
-
-      const botState = {
-        health: bot.health,
-        food: bot.food,
-        isNight,
-        hostileMobs: hostileEntity ? [hostileEntity.name] : [],
-        inventoryItems
-      };
+      const botState = getBotEnvironmentalState(bot);
 
       const decision = await brain.thinkAutonomous(persona, botPos, botState);
       recordDiary(botName, '自律意思決定', `${decision.thought} (決定アクション: ${decision.action})`, botPos);
@@ -610,6 +771,21 @@ function executeAction(bot, persona, thought, targetPlayer) {
     case 'craft':
       if (bot.setBotBusy) bot.setBotBusy('craft', 15000);
       craftSurvivalKit(bot);
+      break;
+
+    case 'cook':
+      cookFoodAtUtility(bot);
+      break;
+
+    case 'escape_water':
+      bot.setControlState('jump', true);
+      const safeLand = bot.findBlock({
+        matching: b => !b.name.includes('water') && b.name !== 'air',
+        maxDistance: 16
+      });
+      if (safeLand) {
+        bot.pathfinder.setGoal(new goals.GoalNear(safeLand.position.x, safeLand.position.y + 1, safeLand.position.z, 0.5));
+      }
       break;
 
     case 'equip':
