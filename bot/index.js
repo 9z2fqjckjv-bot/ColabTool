@@ -19,6 +19,7 @@ const path = require('path');
 
 const personas = require('./persona');
 const AIBrain = require('./brain');
+const VisionCapturer = require('./vision_capturer');
 
 const SERVER_HOST = process.env.MC_HOST || 'localhost';
 const SERVER_PORT = parseInt(process.env.MC_PORT || '25565', 10);
@@ -105,6 +106,13 @@ function getBotEnvironmentalState(bot) {
     }
   }
 
+  // 5. 正面注視ブロックの検出 (視界レイキャスト)
+  let lookingAt = null;
+  try {
+    const cursor = bot.blockAtCursor ? bot.blockAtCursor(5) : null;
+    if (cursor) lookingAt = cursor.name;
+  } catch (e) {}
+
   return {
     health: bot.health,
     food: bot.food,
@@ -114,7 +122,8 @@ function getBotEnvironmentalState(bot) {
     oxygenLevel,
     nearbyUtilities,
     hostileMobs,
-    inventoryItems
+    inventoryItems,
+    lookingAt
   };
 }
 
@@ -189,6 +198,13 @@ function createBot(personaKey, index) {
 
   console.log(`[Manager] AIPlayer生成開始: ${botName} (ViewerPort: ${viewerPort})`);
 
+  // 一人称視線スクリーンショットキャプチャエンジンの初期化
+  const visionCapturer = new VisionCapturer({
+    port: viewerPort,
+    botName: botName,
+    intervalMs: 3000
+  });
+
   const bot = mineflayer.createBot({
     host: SERVER_HOST,
     port: SERVER_PORT,
@@ -196,6 +212,8 @@ function createBot(personaKey, index) {
     version: '1.21.1',
     hideErrors: false
   });
+
+  bot.visionCapturer = visionCapturer;
 
   bot.loadPlugin(pathfinder);
   bot.loadPlugin(pvp);
@@ -257,6 +275,9 @@ function createBot(personaKey, index) {
       }
     }
 
+    // 3秒おきの一人称視界スクリーンショット自動取得を開始
+    visionCapturer.startLoop(bot, 3000);
+
     // 初回挨拶（接続負荷を避けて順次発言）
     setTimeout(() => {
       bot.chat(persona.firstGreeting);
@@ -272,10 +293,10 @@ function createBot(personaKey, index) {
     // 高頻度コンパニオン追従＆アイテム回収ループ (滑らかな人間らしい動作)
     startCompanionLoop(bot);
 
-    // 自律意思決定ループ (定期的な周囲偵察・クラフト・自給自足)
+    // 3秒おきの視覚＋知識ベース(RAG)自律意思決定＆高速行動ループ
     setTimeout(() => {
-      startAutonomousLoop(bot, personaKey);
-    }, 10000 + index * 3000);
+      startVisionAutonomousLoop(bot, personaKey);
+    }, 8000 + index * 2500);
   });
 
   // インベントリ更新イベント (bot.inventory はスポーン後に生成されるため spawn イベントで監視登録)
@@ -734,29 +755,58 @@ function startCompanionLoop(bot) {
 }
 
 /**
- * 自律行動ループ (定期的な周囲偵察・クラフト・自給自足)
+ * 3秒おきの視覚スクリーンショット ＋ Minecraft知識ベース(RAG) ＋ 高速行動実行ループ
  */
-function startAutonomousLoop(bot, personaKey) {
+function startVisionAutonomousLoop(bot, personaKey) {
   const persona = personas[personaKey];
   const botName = persona.name;
+  let lastVisionActionTime = 0;
+  let lastChatSpokenTime = 0;
 
+  // 3秒間隔で視覚と思考をチェック
   setInterval(async () => {
-    if (!bot.entity || bot.customState.isBusy) return;
-    if (bot.customState.currentAction !== 'idle') return;
+    if (!bot.entity) return;
+
+    // 行動中（移動中・ブロック破壊中・戦闘中）は割り込まず完了を待つ
+    if (bot.customState.isBusy && bot.customState.currentAction !== 'idle') {
+      return;
+    }
+
+    const now = Date.now();
+    // 3秒のインターバルを担保
+    if (now - lastVisionActionTime < 3000) return;
 
     try {
+      lastVisionActionTime = now;
       const botPos = bot.entity.position;
       const botState = getBotEnvironmentalState(bot);
 
-      const decision = await brain.thinkAutonomous(persona, botPos, botState);
-      recordDiary(botName, '自律意思決定', `${decision.thought} (決定アクション: ${decision.action})`, botPos);
+      // 1. 一人称視線スクリーンショットの取得 (3秒おき)
+      const screenshot = bot.visionCapturer ? await bot.visionCapturer.capture(bot) : { base64: null };
 
-      // 自律アクションの実行
+      // 2. Vision LLM + Minecraft知識ベース(RAG) による高速意思決定 (1〜3秒)
+      const decision = await brain.thinkWithVision(persona, screenshot.base64, botPos, botState);
+      if (!decision) return;
+
+      // 3. 行動日誌に「視界認知・参照知識・決定行動」を克明に記録
+      const diaryDetail = `【視界】${decision.observed || '周囲確認'} | 【知識】${decision.knowledge_used || '基本サバイバル'} | 【行動】${decision.action} (${decision.reason || '即時実行'})`;
+      recordDiary(botName, '視覚・知識意思決定', diaryDetail, botPos);
+
+      // 4. チャット発言（独り言・プレイヤーへの報告、スパム防止で25秒以上の間隔またはモンスター遭遇時）
+      const isUrgent = decision.action === 'attack' || decision.action === 'escape_water';
+      if (decision.reply && (now - lastChatSpokenTime > 25000 || isUrgent)) {
+        bot.chat(decision.reply);
+        brain.addHistory(botName, decision.reply);
+        lastChatSpokenTime = now;
+      }
+
+      // 5. 決定されたアクションを直ちに実行
+      console.log(`🤖 [${botName}] 視覚+知識判断完了: ${decision.action} (理由: ${decision.reason || '知識参照'})`);
       executeAction(bot, persona, decision, null);
     } catch (e) {
-      // 軽微なエラーはスキップして継続
+      // 軽微なエラーは安全にスキップして次サイクルへ
     }
-  }, 12000 + Math.random() * 4000);
+  }, 3000);
 }
 
 /**

@@ -69,16 +69,20 @@ if [ -z "$GEMINI_API_KEY" ]; then
     ollama pull qwen2.5:1.5b > /dev/null 2>&1 || true
 fi
 
-# 5. AIPlayer Bot の依存関係確認 & 再起動 (最新brain.js/自律行動/自動装備を安全に反映)
+# 5. AIPlayer Bot の依存関係確認 & 再起動 (最新3秒視覚スクショ/知識ベースRAG/自律行動を反映)
 echo ">> [4/4] AIPlayerクラスタ (Gemini, ChatGPT, Claude, Grok) の最新コード反映..."
 cd "$REPO_DIR/bot"
 if [ ! -d "node_modules/canvas" ]; then
     npm install canvas --no-save > /dev/null 2>&1 || true
 fi
+if [ ! -d "node_modules/puppeteer" ]; then
+    npm install puppeteer --no-save > /dev/null 2>&1 || true
+fi
 
 pkill -f "node index.js" || true
+sleep 1
 nohup node index.js > /content/bots.log 2>&1 &
-echo "✅ AIPlayerクラスタを最新コードで再起動しました。"
+echo "✅ AIPlayerクラスタ (3秒視覚スクショ + Minecraft知識RAG搭載) を最新コードで再起動しました。"
 
 # 6. playit.gg トンネルの生存確認 (停止している場合のみ再起動)
 echo ">> [追加] playit.gg トンネル状態確認..."

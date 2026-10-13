@@ -5,6 +5,7 @@
  */
 
 const axios = require('axios');
+const knowledgeBase = require('./knowledge_base');
 
 class AIBrain {
   constructor(options = {}) {
@@ -13,6 +14,7 @@ class AIBrain {
     this.modelName = process.env.LLM_MODEL || 'qwen2.5:1.5b';
     this.chatHistory = [];
     this.maxHistory = 20;
+    this.knowledgeBase = knowledgeBase;
   }
 
   addHistory(sender, text) {
@@ -58,6 +60,10 @@ class AIBrain {
   async thinkChat(persona, userMessage, playerPos, botPos, botState = {}) {
     this.addHistory('User', userMessage);
 
+    // 関連するMinecraft知識を検索
+    const knowledgeList = this.knowledgeBase.search(userMessage, botState, 2);
+    const knowledgeSection = this.knowledgeBase.formatForPrompt(knowledgeList);
+
     const historyStr = this.getFormattedHistory();
     const systemPrompt = `
 ${persona.systemPrompt}
@@ -72,6 +78,9 @@ ${persona.systemPrompt}
 - 周囲の設備: ${botState.nearbyUtilities?.join(', ') || 'なし (持ち運び作業台を使用)'}
 - 周囲の敵対モブ: ${botState.hostileMobs?.join(', ') || 'なし'}
 - 時間帯: ${botState.isNight ? '夜 (危険)' : '昼 (安全)'}
+
+【Minecraftサバイバル知識ベース (参照)】
+${knowledgeSection || '基本サバイバル手順に従う'}
 
 【直近の会話履歴】
 ${historyStr}
@@ -113,6 +122,79 @@ ${historyStr}
 
     // 3. LLM起動遅延時やオフライン時の動的コンテキスト返答生成
     return this.generateDynamicFallback(persona, userMessage, botState);
+  }
+
+  /**
+   * 3秒おきの視覚スクリーンショット(Base64) ＋ Minecraft知識ベース(RAG) を用いた超高速意思決定
+   */
+  async thinkWithVision(persona, screenshotBase64, botPos, botState = {}) {
+    // 1. 視界や環境からMinecraft知識ベースを即時検索
+    const searchTarget = [botState.lookingAt, ...(botState.hostileMobs || [])].filter(Boolean).join(' ');
+    const knowledgeList = this.knowledgeBase.search(searchTarget, botState, 3);
+    const knowledgeText = this.knowledgeBase.formatForPrompt(knowledgeList);
+
+    const promptText = `
+${persona.systemPrompt}
+あなたは「${persona.name}」です。
+プレイヤーの目線（一人称POV画像）と最新のMinecraftサバイバル知識ベースを参照し、数秒以内に行う次の具体的なアクションを決定してください。
+
+【現在の状況・環境】
+- あなたの位置: X:${Math.round(botPos.x)}, Y:${Math.round(botPos.y)}, Z:${Math.round(botPos.z)}
+- HP: ${botState.health || 20}/20, 空腹度: ${botState.food || 20}/20, 酸素: ${botState.oxygenLevel || 20}/20
+- 現在の状態: ${botState.isInWater ? '⚠️ 水没中 (浮上脱出が必要)' : botState.isInLava ? '🚨 溶岩に接触 (緊急退避)' : '陸上 (通常)'}
+- 周囲の敵対モブ: ${botState.hostileMobs?.join(', ') || '視界内なし'}
+- 正面注視ブロック: ${botState.lookingAt || 'なし'}
+- インベントリ所持品: ${botState.inventoryItems?.slice(0, 8).join(', ') || '空'}
+- 周囲の設備: ${botState.nearbyUtilities?.join(', ') || 'なし'}
+- 時間帯: ${botState.isNight ? '夜 (モンスター活動中)' : '昼 (安全)'}
+
+【参照すべきMinecraftサバイバル知識ベース】
+${knowledgeText}
+
+【アクション一覧 (action)】
+- "collect_wood": 視界にある原木を伐採して資材確保
+- "mine": 視界の石や鉱石を採掘
+- "craft": 作業台を使ってツール・武器を作成
+- "cook": かまどや焚き火で肉を焼く
+- "attack": 迫り来るモンスターを迎撃
+- "equip": インベントリ内の最良装備を身につける
+- "follow": プレイヤーの近くへ移動・合流
+- "escape_water": 水から陸地へ素早く這い上がる
+- "explore": 付近を前進・探索
+- "stop": その場で待機
+
+必ず以下のJSON形式のみで出力してください:
+{
+  "observed": "画像および視界で確認できた客観的状況（1文）",
+  "knowledge_used": "参照したMinecraft知識の要約（1文）",
+  "reply": "あなたの個性(${persona.personality})に合わせた短いセリフまたは独り言",
+  "action": "collect_wood | mine | craft | cook | attack | equip | follow | escape_water | explore | stop",
+  "target": "行動の対象（原木、ゾンビ、石、プレイヤー等。特になければnull）",
+  "reason": "この行動を選んだ具体的な理由"
+}
+`;
+
+    // 1. Gemini Vision API (画像直接解析: 1〜2秒の高速推論)
+    if (this.geminiApiKey && screenshotBase64) {
+      const visionRes = await this.callGeminiVisionApi(persona, promptText, screenshotBase64);
+      if (visionRes) return visionRes;
+    }
+
+    // 2. ローカルLLM (テキスト + 視覚メタデータ + 知識ベース)
+    const localRes = await this.callLocalLlm(persona, promptText, "視覚スクリーンショットと知識ベースを参照して次の行動を決定してください。");
+    if (localRes) {
+      return {
+        observed: `視界: ${botState.lookingAt || '周囲'}, 周囲敵: ${botState.hostileMobs?.join(',') || 'なし'}`,
+        knowledge_used: knowledgeList[0]?.title || '基本サバイバル',
+        reply: localRes.reply || '周囲を確認して行動開始します！',
+        action: localRes.action || 'explore',
+        target: localRes.target || null,
+        reason: 'ローカル高速推論による決定'
+      };
+    }
+
+    // 3. 高速フォールバック（緊急時・安全第一）
+    return this.generateVisionFallback(persona, botState, knowledgeList);
   }
 
   /**
@@ -242,6 +324,128 @@ ${historyStr}
       console.warn(`[Gemini API Warning] ${persona.name}: 生成スキップ (${err.message})`);
     }
     return null;
+  }
+
+  /**
+   * Gemini 1.5/2.0 Flash Vision による超高速マルチモーダル推論 (画像+テキスト)
+   */
+  async callGeminiVisionApi(persona, promptText, screenshotBase64) {
+    try {
+      // gemini-1.5-flash または gemini-2.0-flash
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${this.geminiApiKey}`;
+      const response = await axios.post(
+        url,
+        {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  inlineData: {
+                    mimeType: "image/jpeg",
+                    data: screenshotBase64
+                  }
+                },
+                { text: promptText }
+              ]
+            }
+          ],
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: 350,
+            responseMimeType: "application/json"
+          }
+        },
+        { timeout: 7000 }
+      );
+
+      const content = response.data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (content) {
+        return this.parseVisionResponse(content, persona);
+      }
+    } catch (err) {
+      console.warn(`[Gemini Vision Warning] ${persona.name}: 画像推論スキップ (${err.message})`);
+    }
+    return null;
+  }
+
+  parseVisionResponse(raw, persona) {
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (parsed.action) {
+          return {
+            observed: parsed.observed || '視界内の状況を確認',
+            knowledge_used: parsed.knowledge_used || 'サバイバル知識',
+            reply: parsed.reply || `${persona.name}: 周囲を確認して次の行動へ移ります。`,
+            action: parsed.action,
+            target: parsed.target || null,
+            reason: parsed.reason || '視界判定に基づく行動'
+          };
+        }
+      }
+    } catch (e) {}
+
+    return null;
+  }
+
+  /**
+   * 視界と知識ベースに基づく高速フォールバック意思決定
+   */
+  generateVisionFallback(persona, botState = {}, knowledgeList = []) {
+    const isNight = botState.isNight;
+    const hasHostile = botState.hostileMobs && botState.hostileMobs.length > 0;
+    const lookingAt = botState.lookingAt || '';
+    const topKnowledge = knowledgeList[0] || { title: '基本サバイバル', content: '安全を確保' };
+
+    let action = 'explore';
+    let target = null;
+    let observed = '視界内に大きな異常はありません。平穏な状態です。';
+    let reason = '周囲の安全確認と資材探索';
+
+    if (botState.isInWater) {
+      action = 'escape_water';
+      observed = '水中に没しています。酸素の消費に注意が必要。';
+      reason = '溺死を防ぐため水面に浮上し陸地へ避難する';
+    } else if (hasHostile) {
+      action = 'attack';
+      target = botState.hostileMobs[0];
+      observed = `視界内にモンスター「${target}」を確認！`;
+      reason = '自衛およびプレイヤー保護のため迎撃';
+    } else if (lookingAt.includes('log') || lookingAt.includes('wood')) {
+      action = 'collect_wood';
+      target = lookingAt;
+      observed = `正面に原木「${lookingAt}」を確認。`;
+      reason = '基本ツール作成に必要な木材を確保するため';
+    } else if (lookingAt.includes('stone') || lookingAt.includes('ore')) {
+      action = 'mine';
+      target = lookingAt;
+      observed = `正面に採掘可能なブロック「${lookingAt}」を確認。`;
+      reason = 'ツールのアップグレード用鉱石を採掘するため';
+    } else if (isNight) {
+      action = 'follow';
+      target = 'player';
+      observed = '夜間になり周囲が暗くなっています。危険度が増加。';
+      reason = 'モンスターの湧きを警戒しプレイヤーと合流';
+    }
+
+    const reply = persona.name === 'Gemini'
+      ? `視界良好！次は「${action}」を進めよう！`
+      : persona.name === 'ChatGPT'
+      ? `周囲の状況を分析しました。${action}を実行します。`
+      : persona.name === 'Claude'
+      ? `安全を確認しました。${reason}のため行動しますね。`
+      : `おっ、いい感じだな！次は${action}いっちゃおうぜ！`;
+
+    return {
+      observed,
+      knowledge_used: topKnowledge.title,
+      reply,
+      action,
+      target,
+      reason
+    };
   }
 
   parseJsonResponse(raw, persona) {

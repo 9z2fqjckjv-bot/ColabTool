@@ -14,6 +14,8 @@ file_rel_paths = [
     'bot/package.json',
     'bot/persona.js',
     'bot/brain.js',
+    'bot/knowledge_base.js',
+    'bot/vision_capturer.js',
     'bot/index.js',
     'recorder/record_viewer.sh',
     'recorder/multiview.html',
