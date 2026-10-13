@@ -122,6 +122,84 @@ const MINECRAFT_KNOWLEDGE = [
 class MinecraftKnowledgeBase {
   constructor() {
     this.entries = MINECRAFT_KNOWLEDGE;
+    this.historyDatabase = [];
+    this.maxHistory = 100;
+  }
+
+  /**
+   * チャットや行動、出来事のエピソード記憶を履歴データベースに登録
+   */
+  recordHistory(type, sender, text, location = null, metadata = {}) {
+    const entry = {
+      id: `hist_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      type, // 'chat' | 'action' | 'event' | 'discovery'
+      sender: sender || 'System',
+      text: text || '',
+      time: new Date().toLocaleTimeString('ja-JP'),
+      pos: location ? { x: Math.round(location.x), y: Math.round(location.y), z: Math.round(location.z) } : null,
+      metadata,
+      timestamp: Date.now()
+    };
+
+    this.historyDatabase.push(entry);
+    if (this.historyDatabase.length > this.maxHistory) {
+      this.historyDatabase.shift();
+    }
+    return entry;
+  }
+
+  /**
+   * 履歴データベースから直近履歴＋文脈関連履歴を抽出
+   */
+  searchHistory(query = '', context = {}, limit = 5) {
+    if (this.historyDatabase.length === 0) return [];
+
+    // 直近の履歴（最新3件）を優先保持
+    const recent = this.historyDatabase.slice(-3);
+
+    // クエリや周辺環境に関連する過去の履歴をスコアリング
+    const terms = typeof query === 'string' ? query.toLowerCase().split(/[\s,]+/) : [];
+    if (context.lookingAt) terms.push(context.lookingAt.toLowerCase());
+    if (context.hostileMobs) context.hostileMobs.forEach(m => terms.push(m.toLowerCase()));
+
+    const scored = this.historyDatabase.slice(0, -3).map(item => {
+      let score = 0;
+      const fullText = `${item.sender} ${item.text} ${item.type}`.toLowerCase();
+      for (const t of terms) {
+        if (t && t.length > 1 && fullText.includes(t)) {
+          score += 5;
+        }
+      }
+      return { item, score };
+    });
+
+    const relevant = scored
+      .filter(s => s.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, Math.max(1, limit - recent.length))
+      .map(s => s.item);
+
+    // 重複除去して結合（時系列順）
+    const combined = [...relevant, ...recent];
+    const unique = Array.from(new Set(combined.map(e => e.id)))
+      .map(id => combined.find(e => e.id === id))
+      .sort((a, b) => a.timestamp - b.timestamp);
+
+    return unique.slice(-limit);
+  }
+
+  /**
+   * LLMプロンプト用に履歴データベースをフォーマット
+   */
+  formatHistoryForPrompt(historyList) {
+    if (!historyList || historyList.length === 0) {
+      return '（過去の行動・対話履歴はまだありません）';
+    }
+    return historyList.map(h => {
+      const typeTag = h.type === 'chat' ? '💬発言' : (h.type === 'action' ? '🛠️行動' : '📌出来事');
+      const posStr = h.pos ? ` (X:${h.pos.x},Y:${h.pos.y},Z:${h.pos.z})` : '';
+      return `[${h.time}] ${typeTag} ${h.sender}: ${h.text}${posStr}`;
+    }).join('\n');
   }
 
   /**

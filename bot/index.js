@@ -60,6 +60,13 @@ function recordDiary(botName, actionType, detail, pos = null) {
   }
   const combinedRow = `| ${timeStr} | **${botName}** | \`${posStr}\` | ${actionType} | ${detail.replace(/\|/g, '-')} |\n`;
   fs.appendFileSync(combinedPath, combinedRow, 'utf8');
+
+  // 3. AIの頭脳（知識・履歴データベース）へも自動蓄積
+  try {
+    const isChat = actionType.includes('対話') || actionType.includes('発言') || actionType.includes('挨拶');
+    const histType = isChat ? 'chat' : 'action';
+    brain.knowledgeBase.recordHistory(histType, botName, `${actionType}: ${detail}`, pos);
+  } catch (_) {}
 }
 
 /**
@@ -786,11 +793,12 @@ function startVisionAutonomousLoop(bot, personaKey) {
       const botPos = bot.entity.position;
       const botState = getBotEnvironmentalState(bot);
 
-      // 1. 一人称視線スクリーンショットの取得 (3秒おき)
-      const screenshot = bot.visionCapturer ? await bot.visionCapturer.capture(bot) : { base64: null };
+      // 1. 直近のチャット履歴を取得し、一人称視線スクリーンショットにHUDオーバーレイ合成
+      const recentChats = brain.chatHistory.slice(-4);
+      const screenshot = bot.visionCapturer ? await bot.visionCapturer.capture(bot, recentChats) : { base64: null };
 
-      // 2. Vision LLM + Minecraft知識ベース(RAG) による高速意思決定 (1〜3秒)
-      const decision = await brain.thinkWithVision(persona, screenshot.base64, botPos, botState);
+      // 2. Vision LLM + 今までの履歴DB + Minecraft知識ベース(RAG) による高速意思決定 (1〜3秒)
+      const decision = await brain.thinkWithVision(persona, screenshot.base64, botPos, botState, recentChats);
       if (!decision) return;
 
       // 3. 行動日誌に「視界認知・参照知識・決定行動」を克明に記録

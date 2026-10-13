@@ -60,9 +60,16 @@ class AIBrain {
   async thinkChat(persona, userMessage, playerPos, botPos, botState = {}) {
     this.addHistory('User', userMessage);
 
-    // 関連するMinecraft知識を検索
+    // 1. 会話を履歴データベースへ記録
+    this.knowledgeBase.recordHistory('chat', 'User', userMessage, playerPos);
+
+    // 2. 関連するMinecraft知識を検索
     const knowledgeList = this.knowledgeBase.search(userMessage, botState, 2);
     const knowledgeSection = this.knowledgeBase.formatForPrompt(knowledgeList);
+
+    // 3. 今までの会話・行動履歴データベースを検索
+    const historyList = this.knowledgeBase.searchHistory(userMessage, botState, 6);
+    const historyDbText = this.knowledgeBase.formatHistoryForPrompt(historyList);
 
     const historyStr = this.getFormattedHistory();
     const systemPrompt = `
@@ -78,6 +85,9 @@ ${persona.systemPrompt}
 - 周囲の設備: ${botState.nearbyUtilities?.join(', ') || 'なし (持ち運び作業台を使用)'}
 - 周囲の敵対モブ: ${botState.hostileMobs?.join(', ') || 'なし'}
 - 時間帯: ${botState.isNight ? '夜 (危険)' : '昼 (安全)'}
+
+【今までの行動・会話履歴データベース (参照必須)】
+${historyDbText}
 
 【Minecraftサバイバル知識ベース (参照)】
 ${knowledgeSection || '基本サバイバル手順に従う'}
@@ -101,7 +111,8 @@ ${historyStr}
 【絶対遵守のルール】
 1. 「了解です」「わかりました」などの画一的なテンプレート文は絶対に使わないでください。
 2. あなた独自の性格(${persona.personality})と口調(${persona.speechStyle})で、プレイヤーの発言内容に直接触れた具体的で生き生きとした日本語（1〜2文）を発言してください。
-3. 必ず以下のJSON形式のみで出力してください。
+3. 過去の会話や行動履歴がある場合、それを踏まえた継続性のある発言・行動をしてください。
+4. 必ず以下のJSON形式のみで出力してください。
 
 {
   "reply": "あなたの性格に合わせた個性的な発言内容",
@@ -113,30 +124,47 @@ ${historyStr}
     // 1. Gemini API (キー指定時)
     if (this.geminiApiKey) {
       const geminiRes = await this.callGeminiApi(persona, systemPrompt, userMessage);
-      if (geminiRes) return geminiRes;
+      if (geminiRes) {
+        if (geminiRes.reply) this.knowledgeBase.recordHistory('chat', persona.name, geminiRes.reply, botPos);
+        return geminiRes;
+      }
     }
 
     // 2. ローカルLLM (Ollama / vLLM)
     const localRes = await this.callLocalLlm(persona, systemPrompt, userMessage);
-    if (localRes) return localRes;
+    if (localRes) {
+      if (localRes.reply) this.knowledgeBase.recordHistory('chat', persona.name, localRes.reply, botPos);
+      return localRes;
+    }
 
     // 3. LLM起動遅延時やオフライン時の動的コンテキスト返答生成
-    return this.generateDynamicFallback(persona, userMessage, botState);
+    const fallbackRes = this.generateDynamicFallback(persona, userMessage, botState);
+    if (fallbackRes.reply) this.knowledgeBase.recordHistory('chat', persona.name, fallbackRes.reply, botPos);
+    return fallbackRes;
   }
 
   /**
-   * 3秒おきの視覚スクリーンショット(Base64) ＋ Minecraft知識ベース(RAG) を用いた超高速意思決定
+   * 3秒おきの視覚スクリーンショット(Base64) ＋ Minecraft知識ベース ＋ 今までの履歴DBを用いた超高速意思決定
    */
-  async thinkWithVision(persona, screenshotBase64, botPos, botState = {}) {
+  async thinkWithVision(persona, screenshotBase64, botPos, botState = {}, chatMessages = []) {
     // 1. 視界や環境からMinecraft知識ベースを即時検索
     const searchTarget = [botState.lookingAt, ...(botState.hostileMobs || [])].filter(Boolean).join(' ');
     const knowledgeList = this.knowledgeBase.search(searchTarget, botState, 3);
     const knowledgeText = this.knowledgeBase.formatForPrompt(knowledgeList);
 
+    // 2. 今までの行動・会話履歴データベースを検索・取得
+    const historyList = this.knowledgeBase.searchHistory(searchTarget, botState, 5);
+    const historyDbText = this.knowledgeBase.formatHistoryForPrompt(historyList);
+
+    // 3. 画面上に表示されているチャットメッセージ一覧テキスト
+    const chatDisplayStr = (chatMessages && chatMessages.length > 0)
+      ? chatMessages.slice(-4).map(m => `[${m.time || ''}] <${m.sender}> ${m.text}`).join('\n')
+      : '（新着チャットなし）';
+
     const promptText = `
 ${persona.systemPrompt}
 あなたは「${persona.name}」です。
-プレイヤーの目線（一人称POV画像）と最新のMinecraftサバイバル知識ベースを参照し、数秒以内に行う次の具体的なアクションを決定してください。
+プレイヤーの目線（一人称POV画像・画面内チャット表示付き）と、今までの行動・会話履歴データベース、Minecraftサバイバル知識ベースを参照し、数秒以内に行う次の具体的なアクションを決定してください。
 
 【現在の状況・環境】
 - あなたの位置: X:${Math.round(botPos.x)}, Y:${Math.round(botPos.y)}, Z:${Math.round(botPos.z)}
@@ -147,6 +175,12 @@ ${persona.systemPrompt}
 - インベントリ所持品: ${botState.inventoryItems?.slice(0, 8).join(', ') || '空'}
 - 周囲の設備: ${botState.nearbyUtilities?.join(', ') || 'なし'}
 - 時間帯: ${botState.isNight ? '夜 (モンスター活動中)' : '昼 (安全)'}
+
+【画面内チャット表示 (最新の指示・会話)】
+${chatDisplayStr}
+
+【今までの行動・会話履歴データベース (参照必須・過去の文脈を考慮)】
+${historyDbText}
 
 【参照すべきMinecraftサバイバル知識ベース】
 ${knowledgeText}
@@ -166,11 +200,11 @@ ${knowledgeText}
 必ず以下のJSON形式のみで出力してください:
 {
   "observed": "画像および視界で確認できた客観的状況（1文）",
-  "knowledge_used": "参照したMinecraft知識の要約（1文）",
-  "reply": "あなたの個性(${persona.personality})に合わせた短いセリフまたは独り言",
+  "knowledge_used": "参照したMinecraft知識や過去履歴の要約（1文）",
+  "reply": "あなたの個性(${persona.personality})に合わせた短いセリフまたは独り言（履歴に触れても良い）",
   "action": "collect_wood | mine | craft | cook | attack | equip | follow | escape_water | explore | stop",
   "target": "行動の対象（原木、ゾンビ、石、プレイヤー等。特になければnull）",
-  "reason": "この行動を選んだ具体的な理由"
+  "reason": "この行動を選んだ具体的な理由（過去の指示や履歴との繋がり）"
 }
 `;
 

@@ -4,7 +4,7 @@
  * Gemini Vision / マルチモーダルLLM向けに最適化された画像バッファ(Base64/JPEG)を提供します。
  */
 
-const { createCanvas } = require('canvas');
+const { createCanvas, loadImage } = require('canvas');
 
 class VisionCapturer {
   constructor(options = {}) {
@@ -72,27 +72,29 @@ class VisionCapturer {
   }
 
   /**
-   * 1フレームのスクリーンショットを取得
-   * @param {Object} bot - Mineflayer botインスタンス (フォールバック描画用)
+   * 1フレームのスクリーンショットを取得 (チャットオーバーレイ合成)
+   * @param {Object} bot - Mineflayer botインスタンス
+   * @param {Array} chatMessages - 直近のチャット履歴 [{sender, text, time}]
    * @returns {Promise<{buffer: Buffer, base64: string}>}
    */
-  async capture(bot = null) {
+  async capture(bot = null, chatMessages = []) {
     if (this.isCapturing) {
       return { buffer: this.latestScreenshot, base64: this.latestBase64 };
     }
     this.isCapturing = true;
 
     try {
-      // 1. PuppeteerによるWebGLビューアの直接スクショ
+      // 1. PuppeteerによるWebGLビューアの直接スクショ + チャットオーバーレイ合成
       if (this.page) {
         try {
-          const buffer = await this.page.screenshot({
+          const rawBuffer = await this.page.screenshot({
             type: 'jpeg',
             quality: 70
           });
-          if (buffer && buffer.length > 0) {
-            this.latestScreenshot = buffer;
-            this.latestBase64 = buffer.toString('base64');
+          if (rawBuffer && rawBuffer.length > 0) {
+            const composite = await this.overlayChatOnImage(rawBuffer, chatMessages, bot);
+            this.latestScreenshot = composite;
+            this.latestBase64 = composite.toString('base64');
             this.lastCaptureTime = Date.now();
             return { buffer: this.latestScreenshot, base64: this.latestBase64 };
           }
@@ -107,8 +109,8 @@ class VisionCapturer {
         this.initBrowser().catch(() => {});
       }
 
-      // 3. 高速Canvas視覚HUD生成 (Viewer未起動時・ヘッドレス最適化時)
-      const fallbackBuffer = this.renderVisualHud(bot);
+      // 3. 高速Canvas視覚HUD生成 (チャットオーバーレイ付き)
+      const fallbackBuffer = this.renderVisualHud(bot, chatMessages);
       this.latestScreenshot = fallbackBuffer;
       this.latestBase64 = fallbackBuffer.toString('base64');
       this.lastCaptureTime = Date.now();
@@ -119,9 +121,82 @@ class VisionCapturer {
   }
 
   /**
+   * Puppeteer画像の上にチャットログとHUDをオーバーレイ合成
+   */
+  async overlayChatOnImage(rawBuffer, chatMessages, bot) {
+    try {
+      const img = await loadImage(rawBuffer);
+      const width = img.width || 480;
+      const height = img.height || 320;
+      const canvas = createCanvas(width, height);
+      const ctx = canvas.getContext('2d');
+
+      // 背景に元のWebGLスクショを描画
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // 上部HUD (HP / 空腹度 / 座標)
+      if (bot && bot.entity) {
+        const pos = bot.entity.position;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(5, 5, width - 10, 24);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText(`POV: ${this.botName} | X:${Math.round(pos.x)} Y:${Math.round(pos.y)} Z:${Math.round(pos.z)} | HP:${bot.health || 20} Food:${bot.food || 20}`, 10, 21);
+      }
+
+      // 下部チャットログオーバーレイ描画
+      this.drawChatBox(ctx, width, height, chatMessages);
+
+      return canvas.toBuffer('image/jpeg', { quality: 0.75 });
+    } catch (_) {
+      return rawBuffer;
+    }
+  }
+
+  /**
+   * チャットボックスの描画共通処理
+   */
+  drawChatBox(ctx, width, height, chatMessages) {
+    if (!chatMessages || chatMessages.length === 0) return;
+
+    const chatSlice = chatMessages.slice(-4);
+    const boxHeight = chatSlice.length * 18 + 20;
+    const boxY = height - boxHeight - 8;
+
+    // 半透明背景
+    ctx.fillStyle = 'rgba(10, 15, 25, 0.65)';
+    ctx.fillRect(8, boxY, width - 16, boxHeight);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(8, boxY, width - 16, boxHeight);
+
+    // タイトルバー
+    ctx.fillStyle = '#ced6e0';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.fillText('💬 MINECRAFT LIVE CHAT & LOG', 14, boxY + 13);
+
+    // チャットメッセージ各行
+    let lineY = boxY + 28;
+    ctx.font = '12px sans-serif';
+    chatSlice.forEach(msg => {
+      const sender = msg.sender || 'Player';
+      const text = msg.text || '';
+      const time = msg.time ? `[${msg.time}] ` : '';
+
+      if (sender === 'User' || sender === 'Player') {
+        ctx.fillStyle = '#70a1ff'; // プレイヤー色（ライトブルー）
+      } else {
+        ctx.fillStyle = '#2ed573'; // Bot色（ライトグリーン）
+      }
+      ctx.fillText(`${time}<${sender}> ${text}`.slice(0, 52), 14, lineY);
+      lineY += 18;
+    });
+  }
+
+  /**
    * Mineflayerの客観データをもとに、Gemini Visionが状況認識できる視界オーバーレイ画像を生成
    */
-  renderVisualHud(bot) {
+  renderVisualHud(bot, chatMessages = []) {
     const width = 480;
     const height = 320;
     const canvas = createCanvas(width, height);
@@ -188,7 +263,10 @@ class VisionCapturer {
     ctx.lineTo(width / 2, height / 2 + 10);
     ctx.stroke();
 
-    return canvas.toBuffer('image/jpeg', { quality: 0.7 });
+    // チャットログ表示エリア描画
+    this.drawChatBox(ctx, width, height, chatMessages);
+
+    return canvas.toBuffer('image/jpeg', { quality: 0.75 });
   }
 
   /**
