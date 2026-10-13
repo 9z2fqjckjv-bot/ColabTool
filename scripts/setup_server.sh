@@ -60,13 +60,21 @@ else
     echo "既存の server.jar が見つかりました。"
 fi
 
-echo "=== [4/4] playit.gg (無料トンネルCLI) のダウンロード ==="
+echo "=== [4/4] playit.gg (無料トンネルCLI) のダウンロード & 設定 ==="
 if [ ! -f "/usr/local/bin/playit" ]; then
     echo "playit.gg CLI をインストール中..."
     curl -SsL -o /usr/local/bin/playit "https://github.com/playit-cloud/playit-agent/releases/download/v${PLAYIT_VERSION}/playit-linux-amd64"
     chmod +x /usr/local/bin/playit
 fi
-echo "playit.gg の準備完了"
+
+# playit.toml の固定設定配置 (エージェント: zuyasi, ドメイン: zuyasi.playit.plus)
+mkdir -p /etc/playit /root/.config/playit_gg /content
+if [ -f "$REPO_DIR/playit.toml" ]; then
+    cp -f "$REPO_DIR/playit.toml" /etc/playit/playit.toml
+    cp -f "$REPO_DIR/playit.toml" /root/.config/playit_gg/playit.toml
+    cp -f "$REPO_DIR/playit.toml" /content/playit.toml
+fi
+echo "playit.gg (固定エージェント: zuyasi) の準備完了"
 
 echo "=== [追加1] 互換性プラグイン (ViaVersion) の導入 ==="
 if [ ! -f "$SERVER_DIR/plugins/ViaVersion.jar" ]; then

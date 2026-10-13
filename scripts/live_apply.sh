@@ -82,6 +82,18 @@ pkill -f "node index.js" || true
 nohup node index.js > /content/bots.log 2>&1 &
 echo "AI仲間たちが再接続中..."
 
+# 6. playit.gg トンネルを固定エージェント (zuyasi / zuyasi.playit.plus) に切り替え
+echo ">> [追加] playit.gg トンネルを固定エージェント (zuyasi) に再接続中..."
+pkill -f "playit" || true
+PLAYIT_SECRET="5ae8f7c17f9d58ecb144ed6df1f6d1bdffb6a30bc14a09a815976da2ccd174c1"
+mkdir -p /etc/playit /root/.config/playit_gg /content
+if [ -f "$REPO_DIR/playit.toml" ]; then
+    cp -f "$REPO_DIR/playit.toml" /etc/playit/playit.toml
+    cp -f "$REPO_DIR/playit.toml" /root/.config/playit_gg/playit.toml
+    cp -f "$REPO_DIR/playit.toml" /content/playit.toml
+fi
+nohup playit --secret "$PLAYIT_SECRET" --stdout > /content/playit.log 2>&1 &
+
 for i in {1..8}; do
     sleep 1
     echo -n "."
@@ -94,6 +106,8 @@ echo "=================================================="
 tail -n 15 /content/bots.log 2>/dev/null || true
 
 echo ""
+echo "🌐 【固定接続先アドレス】: zuyasi.playit.plus"
+echo "   (予備アドレス: cairo-medicinal.tun.ply.gg:47605)"
 echo "👉 Minecraft内であなたの手元（またはインベントリ/オフハンド）に"
 echo "   「全員位置レーダー地図」が届いているかご確認ください！(Fキーで左手装備推奨)"
 echo "👉 チャットで「@Gemini こんにちは」や「@all 木を集めて」と発言し、"

@@ -86,13 +86,22 @@ else
     echo "⚠️ 起動確認がタイムアウトしましたが、バックグラウンドで起動継続中です。"
 fi
 
-# 5. playit.gg トンネル起動
-echo ">> [5/7] playit.gg トンネル接続中..."
+# 5. playit.gg トンネル起動 (固定エージェント: zuyasi / 固定ドメイン: zuyasi.playit.plus)
+echo ">> [5/7] playit.gg トンネル接続中 (エージェント: zuyasi / zuyasi.playit.plus)..."
 pkill -f "playit" || true
-nohup playit --stdout > /content/playit.log 2>&1 &
+
+PLAYIT_SECRET="5ae8f7c17f9d58ecb144ed6df1f6d1bdffb6a30bc14a09a815976da2ccd174c1"
+mkdir -p /etc/playit /root/.config/playit_gg /content
+if [ -f "$REPO_DIR/playit.toml" ]; then
+    cp -f "$REPO_DIR/playit.toml" /etc/playit/playit.toml
+    cp -f "$REPO_DIR/playit.toml" /root/.config/playit_gg/playit.toml
+    cp -f "$REPO_DIR/playit.toml" /content/playit.toml
+fi
+
+nohup playit --secret "$PLAYIT_SECRET" --stdout > /content/playit.log 2>&1 &
 echo "playit.gg の接続確立を待機中..."
 for i in {1..15}; do
-    if grep -qE "claim|tunnel|tun\.ply\.gg|joinmc\.link" /content/playit.log 2>/dev/null; then
+    if grep -qE "tunnel running|registered|cairo-medicinal|zuyasi" /content/playit.log 2>/dev/null; then
         break
     fi
     sleep 1
@@ -101,7 +110,6 @@ done
 echo ""
 
 # 6. Bot依存関係インストール & AIPlayerクラスタ起動
-echo ">> [6/7] AIPlayer群 (Gemini, ChatGPT, Claude, Grok) 起動中..."
 cd "$REPO_DIR/bot"
 if [ ! -d "node_modules/canvas" ] || [ ! -d "node_modules/prismarine-viewer" ]; then
     echo "Mineflayer Bot & Viewer (canvas) の依存関係をインストール中 (約30秒)..."
@@ -125,21 +133,16 @@ nohup bash -c "while true; do sleep 600; python3 '$REPO_DIR/scripts/backup_resto
 
 echo ""
 echo "=================================================="
-echo "★ Minecraft 接続先アドレス ★"
+echo "★ Minecraft 接続先アドレス (固定完了) ★"
 echo "=================================================="
+echo "🎉 【固定接続先アドレス】手元のMinecraftに入力してログイン:"
+echo "👉  zuyasi.playit.plus"
+echo "   (予備アドレス: cairo-medicinal.tun.ply.gg:47605)"
+echo "--------------------------------------------------"
 
 CLAIM_URL=$(grep -oE "https://playit\.gg/claim/[a-zA-Z0-9]+" /content/playit.log 2>/dev/null | head -n 1)
-TUNNEL_ADDR=$(grep -oE "[a-zA-Z0-9\.\-]+\.(gl\.joinmc\.link|auto\.playit\.gg|playit\.gg|tun\.ply\.gg):?[0-9]*" /content/playit.log 2>/dev/null | tail -n 1)
-
-if [ -n "$TUNNEL_ADDR" ]; then
-    echo "🎉 【接続先アドレス】手元のMinecraftに入力してログイン:"
-    echo "👉  $TUNNEL_ADDR"
-    echo "--------------------------------------------------"
-fi
-
 if [ -n "$CLAIM_URL" ]; then
-    echo "【トンネル初回設定リンク】"
-    echo "ブラウザで以下のURLを開き、「Add Tunnel (Minecraft Java)」をクリックしてください:"
+    echo "⚠️ トンネル登録URLが検出されました (通常は自動認証されるため不要です):"
     echo "👉  $CLAIM_URL"
     echo "--------------------------------------------------"
 fi

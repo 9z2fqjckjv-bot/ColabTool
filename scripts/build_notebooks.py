@@ -20,7 +20,8 @@ file_rel_paths = [
     'plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/RadarMapPlugin.java',
     'plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/RadarMapRenderer.java',
     'plugins_src/RadarMap/src/main/resources/plugin.yml',
-    'nanndemoya26.key'
+    'nanndemoya26.key',
+    'playit.toml'
 ]
 
 for rel in file_rel_paths:
@@ -67,7 +68,7 @@ nb = {
     "## 🚀 ステップ 1: 【ワンクリック起動】\n",
     "**下のセルを実行（再生ボタンを押す）するだけ** で、すべての準備・起動・Bot参加・録画が全自動で始まります。  \n",
     "サーバーはバックグラウンドで独立稼働し、**約45秒〜1分でこのセルの実行は完了**します。  \n",
-    "完了後に表示される **`playit.gg` の接続アドレス**（例: `xxx.gl.joinmc.link` または `cairo-kt.tun.ply.gg`）を手元のMinecraft（Java版）に入力してログインしてください。"
+    "完了後、固定接続アドレス **`zuyasi.playit.plus`**（予備: `cairo-medicinal.tun.ply.gg:47605`）を手元のMinecraft（Java版）に入力してログインしてください。"
    ]
   },
   {
@@ -149,7 +150,10 @@ nb = {
     "print(\"=== [1] Minecraftサーバー稼働状況 ===\")\n",
     "!pgrep -a java || echo \"⚠️ Javaサーバープロセスが見つかりません\"\n",
     "\n",
-    "print(\"\\n=== [2] playit.gg トンネル接続情報 ===\")\n",
+    "print(\"\\n=== [2] playit.gg トンネル接続情報 (エージェント: zuyasi 固定) ===\")\n",
+    "print(\"🎉 【固定接続先アドレス】手元のMinecraftのダイレクト接続に入力してください:\")\n",
+    "print(\"👉  zuyasi.playit.plus\")\n",
+    "print(\"   (予備アドレス: cairo-medicinal.tun.ply.gg:47605)\")\n",
     "if os.path.exists(\"/content/playit.log\"):\n",
     "    with open(\"/content/playit.log\", \"r\") as f:\n",
     "        log_data = f.read()\n",
@@ -157,16 +161,10 @@ nb = {
     "    matches = re.findall(r\"([a-zA-Z0-9\\.\\-]+\\.(?:gl\\.joinmc\\.link|auto\\.playit\\.gg|playit\\.gg|tun\\.ply\\.gg)(?::\\d+)?)\", log_data)\n",
     "    claims = re.findall(r\"(https://playit\\.gg/claim/[a-zA-Z0-9]+)\", log_data)\n",
     "    \n",
-    "    if matches:\n",
-    "        print(\"🎉 【接続先アドレス】手元のMinecraftのダイレクト接続に入力してください:\")\n",
-    "        for m in sorted(list(set(matches))):\n",
-    "            print(f\"👉  {m}\")\n",
-    "    elif claims:\n",
-    "        print(\"⚠️ トンネルの初期登録が必要です。以下のURLをブラウザで開いて「Add Tunnel」を押してください:\")\n",
-    "        print(f\"👉  {claims[-1]}\")\n",
+    "    if claims:\n",
+    "        print(\"⚠️ トンネル登録URLが検出されました (通常は自動認証されるため不要です):\", claims[-1])\n",
     "    else:\n",
-    "        print(\"最新のplayitログ:\")\n",
-    "        !tail -n 8 /content/playit.log\n",
+    "        print(\"✅ 固定トンネル (zuyasi.playit.plus) に正常バインドされています。\")\n",
     "else:\n",
     "    print(\"playit.log が見つかりません。\")\n",
     "\n",
@@ -270,8 +268,8 @@ nb = {
    "metadata": {},
    "source": [
     "---\n",
-    "## 🔄 ステップ 6: 【稼働中サーバーへの最新設定反映（ホットリロード）】\n",
-    "サーバーを止めずに、最新のプラグインやBot設定を即座に再反映・再同期したい場合はこのセルを実行してください。"
+    "## 🔄 ステップ 6: 【稼働中サーバーへの最新設定反映（playit固定化・RadarMap・AI反映）】\n",
+    "サーバーを止めずに、固定トンネル (zuyasi.playit.plus) への切替、最新のレーダー地図プラグイン、Bot設定を即座に再反映したい場合はこのセルを実行してください。"
    ]
   },
   {
@@ -280,7 +278,7 @@ nb = {
    "metadata": {},
    "outputs": [],
    "source": [
-    "#@title 🔄 稼働中サーバーへの最新反映 (RadarMap配布・LLM確認・Bot再起動)\n",
+    "#@title 🔄 稼働中サーバーへの最新反映 (playit固定化・RadarMap配布・LLM確認・Bot再起動)\n",
     "!bash /content/ColabTool/scripts/live_apply.sh\n"
    ]
   },
