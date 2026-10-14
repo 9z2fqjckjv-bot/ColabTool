@@ -68,9 +68,16 @@ if [ -n "$CRD_CODE" ]; then
         apt-get install -y -qq /tmp/crd.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1
         rm -f /tmp/crd.deb
     fi
-    mkdir -p /root/.config/chrome-remote-desktop
-    echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /root/.chrome-remote-desktop-session
-    chmod +x /root/.chrome-remote-desktop-session
+    # colabuserの存在確認・設定 (CRDはroot実行不可のため)
+    if ! id -u colabuser >/dev/null 2>&1; then
+        useradd -m -s /bin/bash -G sudo,chrome-remote-desktop colabuser
+        echo "colabuser:123456" | chpasswd
+        echo "colabuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/colabuser
+    fi
+    mkdir -p /home/colabuser/.config/chrome-remote-desktop
+    echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /home/colabuser/.chrome-remote-desktop-session
+    chmod +x /home/colabuser/.chrome-remote-desktop-session
+    chown -R colabuser:colabuser /home/colabuser
 
     # コマンド判定（全文コピーか、認証コード単体か）
     if [[ "$CRD_CODE" == *"start-host"* ]]; then
@@ -82,9 +89,10 @@ if [ -n "$CRD_CODE" ]; then
         CMD="DISPLAY= /opt/google/chrome-remote-desktop/start-host --code=\"$CRD_CODE\" --redirect-url=\"https://remotedesktop.google.com/_/oauthredirect\" --name=\$(hostname) --pin=$CRD_PIN"
     fi
 
-    echo "CRD ホスト起動を実行中..."
-    eval "$CMD" > /content/crd_setup.log 2>&1 || true
+    echo "CRD ホスト起動を実行中 (ユーザー: colabuser)..."
+    sudo -u colabuser bash -c "$CMD" > /content/crd_setup.log 2>&1 || true
     echo "✅ Chrome Remote Desktop を構成しました (ログ: /content/crd_setup.log)"
+    tail -n 10 /content/crd_setup.log 2>/dev/null || true
 fi
 
 echo ""

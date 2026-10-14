@@ -41,9 +41,18 @@ if ! dpkg -s chrome-remote-desktop > /dev/null 2>&1; then
     rm -f /tmp/crd.deb
 fi
 
-mkdir -p /root/.config/chrome-remote-desktop
+# CRD用一般ユーザー (colabuser) の作成 (CRDはrootでの直接実行を拒否するため)
+if ! id -u colabuser >/dev/null 2>&1; then
+    useradd -m -s /bin/bash -G sudo,chrome-remote-desktop colabuser
+    echo "colabuser:123456" | chpasswd
+    echo "colabuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/colabuser
+fi
+
+mkdir -p /root/.config/chrome-remote-desktop /home/colabuser/.config/chrome-remote-desktop
 echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /root/.chrome-remote-desktop-session
-chmod +x /root/.chrome-remote-desktop-session
+echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /home/colabuser/.chrome-remote-desktop-session
+chmod +x /root/.chrome-remote-desktop-session /home/colabuser/.chrome-remote-desktop-session
+chown -R colabuser:colabuser /home/colabuser
 
 # 4. Steam のインストール
 echo ">> [4/8] Steam の確認 & インストール..."
@@ -268,7 +277,11 @@ Terminal=false
 Categories=AudioVideo;
 EOF
 
-# 実行権限の付与
+# 実行権限の付与 & colabuserへの同期
 chmod +x "$DESKTOP_DIR"/*.desktop 2>/dev/null || true
+mkdir -p /home/colabuser/Desktop
+cp -rf "$DESKTOP_DIR"/* /home/colabuser/Desktop/ 2>/dev/null || true
+chmod +x /home/colabuser/Desktop/*.desktop 2>/dev/null || true
+chown -R colabuser:colabuser /home/colabuser
 
 echo "✅ [完了] Gaming PC 仮想環境のセットアップが正常に完了しました。"
