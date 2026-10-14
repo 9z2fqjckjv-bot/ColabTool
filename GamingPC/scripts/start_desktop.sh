@@ -76,7 +76,9 @@ if [ -n "$CRD_CODE" ]; then
     fi
     mkdir -p /home/colabuser/.config/chrome-remote-desktop
     echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /home/colabuser/.chrome-remote-desktop-session
-    chmod +x /home/colabuser/.chrome-remote-desktop-session
+    echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /etc/chrome-remote-desktop-session
+    chmod +x /home/colabuser/.chrome-remote-desktop-session /etc/chrome-remote-desktop-session
+    adduser colabuser chrome-remote-desktop 2>/dev/null || true
     chown -R colabuser:colabuser /home/colabuser
 
     # コマンド判定（全文コピーか、認証コード単体か）
@@ -91,7 +93,8 @@ if [ -n "$CRD_CODE" ]; then
 
     echo "CRD ホスト起動を実行中 (ユーザー: colabuser)..."
     sudo -u colabuser bash -c "$CMD" > /content/crd_setup.log 2>&1 || true
-    echo "✅ Chrome Remote Desktop を構成しました (ログ: /content/crd_setup.log)"
+    service chrome-remote-desktop restart > /dev/null 2>&1 || sudo -u colabuser /opt/google/chrome-remote-desktop/chrome-remote-desktop --start > /dev/null 2>&1 || true
+    echo "✅ Chrome Remote Desktop を構成・起動しました (ログ: /content/crd_setup.log)"
     tail -n 10 /content/crd_setup.log 2>/dev/null || true
 fi
 
