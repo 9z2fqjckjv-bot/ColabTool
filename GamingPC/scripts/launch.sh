@@ -1,8 +1,7 @@
 #!/bin/bash
 # ==============================================================================
-# launch.sh - Clean & Safe One-Click Launch for Colab Gaming PC
+# launch.sh - Robust & Safe One-Click Launch for Colab Gaming PC
 # ==============================================================================
-set -e
 
 export DEBIAN_FRONTEND=noninteractive
 SCREEN_RES="${1:-1680x1050}" # MacBook 16:10 デフォルト
@@ -14,24 +13,25 @@ echo "=================================================="
 
 # 1. タイムゾーン (Asia/Tokyo) & 日本語ロケール
 echo ">> [1/5] 日本標準時 (Asia/Tokyo) & 日本語フォント設定..."
-ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime
-echo "Asia/Tokyo" > /etc/timezone
+ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime 2>/dev/null || true
+echo "Asia/Tokyo" > /etc/timezone 2>/dev/null || true
 
-dpkg --add-architecture i386 || true
-apt-get update -qq
+dpkg --add-architecture i386 2>/dev/null || true
+apt-get update -qq 2>/dev/null || true
 
+# 必要なパッケージの一括インストール（非停止・堅牢化）
 apt-get install -y -qq \
     locales fonts-noto-cjk fonts-noto-color-emoji fonts-ipafont-gothic \
     xfce4 xfce4-goodies xfce4-terminal dbus-x11 x11-xserver-utils x11-utils xterm \
     xvfb x11vnc websockify novnc \
     pulseaudio pulseaudio-utils alsa-utils pavucontrol \
-    libgl1-mesa-glx mesa-utils libvulkan1 vulkan-tools \
+    libgl1-mesa-dri libglx-mesa0 libgl1 mesa-utils libvulkan1 vulkan-tools \
     ffmpeg jq curl wget git zstd htop \
-    openjdk-21-jre-headless openjdk-17-jre-headless > /dev/null 2>&1
+    openjdk-21-jre-headless 2>/dev/null || true
 
-locale-gen ja_JP.UTF-8 > /dev/null 2>&1 || true
-update-locale LANG=ja_JP.UTF-8 > /dev/null 2>&1 || true
-pip install -q websockify > /dev/null 2>&1 || true
+locale-gen ja_JP.UTF-8 2>/dev/null || true
+update-locale LANG=ja_JP.UTF-8 2>/dev/null || true
+pip install -q websockify 2>/dev/null || true
 
 export LANG=ja_JP.UTF-8
 export LC_ALL=ja_JP.UTF-8
@@ -40,9 +40,9 @@ export TZ=Asia/Tokyo
 # 2. 一般ユーザー (colabuser) の作成 & 権限付与
 echo ">> [2/5] 実行ユーザー権限 & オーディオの初期化..."
 if ! id -u colabuser >/dev/null 2>&1; then
-    useradd -m -s /bin/bash -G sudo,video,audio colabuser
-    echo "colabuser:123456" | chpasswd
-    echo "colabuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/colabuser
+    useradd -m -s /bin/bash -G sudo,video,audio colabuser 2>/dev/null || true
+    echo "colabuser:123456" | chpasswd 2>/dev/null || true
+    echo "colabuser ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/colabuser 2>/dev/null || true
 fi
 usermod -aG video,audio,render colabuser 2>/dev/null || true
 xhost +local: > /dev/null 2>&1 || xhost + > /dev/null 2>&1 || true
@@ -57,22 +57,22 @@ echo ">> [3/5] Google Chrome, Steam, Prism Launcher (Minecraft), Discord の導�
 
 # Google Chrome
 if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
-    wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-    apt-get install -y -qq /tmp/chrome.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1
-    rm -f /tmp/chrome.deb
+    wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb || true
+    apt-get install -y -qq /tmp/chrome.deb 2>/dev/null || apt-get install -f -y -qq 2>/dev/null || true
+    rm -f /tmp/chrome.deb 2>/dev/null || true
 fi
 cat << 'EOF' > /usr/local/bin/google-chrome-colab
 #!/bin/bash
 exec /usr/bin/google-chrome-stable --no-sandbox --disable-dev-shm-usage --disable-gpu-sandbox "$@"
 EOF
-chmod +x /usr/local/bin/google-chrome-colab
+chmod +x /usr/local/bin/google-chrome-colab 2>/dev/null || true
 
 # Steam
 if ! which steam > /dev/null 2>&1 && [ ! -f /usr/games/steam ]; then
-    wget -q -O /tmp/steam.deb "https://cdn.cloudflare.steamstatic.com/client/installer/steam.deb" || true
+    wget -q -O /tmp/steam.deb "https://cdn.cloudflare.steamstatic.com/client/installer/steam.deb" 2>/dev/null || true
     if [ -f /tmp/steam.deb ]; then
-        dpkg -i /tmp/steam.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1 || true
-        rm -f /tmp/steam.deb
+        dpkg -i /tmp/steam.deb 2>/dev/null || apt-get install -f -y -qq 2>/dev/null || true
+        rm -f /tmp/steam.deb 2>/dev/null || true
     fi
 fi
 cat << 'EOF' > /usr/local/bin/steam-colab
@@ -81,39 +81,37 @@ xhost +local: > /dev/null 2>&1 || xhost + > /dev/null 2>&1 || true
 export DISPLAY=:1
 exec sudo -u colabuser DISPLAY=:1 HOME=/home/colabuser /usr/games/steam "$@"
 EOF
-chmod +x /usr/local/bin/steam-colab
+chmod +x /usr/local/bin/steam-colab 2>/dev/null || true
 
 # Discord
 if ! which discord > /dev/null 2>&1; then
-    wget -q -O /tmp/discord.deb "https://discord.com/api/download?platform=linux&format=deb" || true
+    wget -q -O /tmp/discord.deb "https://discord.com/api/download?platform=linux&format=deb" 2>/dev/null || true
     if [ -f /tmp/discord.deb ]; then
-        apt-get install -y -qq /tmp/discord.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1 || true
-        rm -f /tmp/discord.deb
+        apt-get install -y -qq /tmp/discord.deb 2>/dev/null || apt-get install -f -y -qq 2>/dev/null || true
+        rm -f /tmp/discord.deb 2>/dev/null || true
     fi
 fi
 cat << 'EOF' > /usr/local/bin/discord-colab
 #!/bin/bash
 exec /usr/bin/discord --no-sandbox "$@"
 EOF
-chmod +x /usr/local/bin/discord-colab
+chmod +x /usr/local/bin/discord-colab 2>/dev/null || true
 
 # Prism Launcher (Minecraft)
 mkdir -p /opt/prismlauncher
 if [ ! -f /opt/prismlauncher/prismlauncher.AppImage ]; then
-    curl -sSL -o /opt/prismlauncher/prismlauncher.AppImage "https://github.com/PrismLauncher/PrismLauncher/releases/download/8.4/PrismLauncher-Linux-8.4-x86_64.AppImage" || \
-    curl -sSL -o /opt/prismlauncher/prismlauncher.AppImage "https://github.com/PrismLauncher/PrismLauncher/releases/latest/download/PrismLauncher-Linux-x86_64.AppImage" || true
+    curl -sSL -o /opt/prismlauncher/prismlauncher.AppImage "https://github.com/PrismLauncher/PrismLauncher/releases/download/8.4/PrismLauncher-Linux-8.4-x86_64.AppImage" 2>/dev/null || \
+    curl -sSL -o /opt/prismlauncher/prismlauncher.AppImage "https://github.com/PrismLauncher/PrismLauncher/releases/latest/download/PrismLauncher-Linux-x86_64.AppImage" 2>/dev/null || true
     chmod +x /opt/prismlauncher/prismlauncher.AppImage 2>/dev/null || true
 fi
 cat << 'EOF' > /usr/local/bin/prismlauncher
 #!/bin/bash
 exec /opt/prismlauncher/prismlauncher.AppImage --appimage-extract-and-run "$@"
 EOF
-chmod +x /usr/local/bin/prismlauncher
+chmod +x /usr/local/bin/prismlauncher 2>/dev/null || true
 
 # OBS Studio
-if ! which obs > /dev/null 2>&1; then
-    apt-get install -y -qq obs-studio > /dev/null 2>&1 || true
-fi
+which obs > /dev/null 2>&1 || apt-get install -y -qq obs-studio 2>/dev/null || true
 
 # 4. 日本語デスクトップショートカットの配置
 echo ">> [4/5] デスクトップショートカットの整備..."
@@ -211,7 +209,6 @@ Terminal=false
 Categories=AudioVideo;Recorder;
 EOF
 
-# 信頼済み権限を付与
 chmod +x "$DESKTOP_DIR"/*.desktop 2>/dev/null || true
 for f in "$DESKTOP_DIR"/*.desktop; do
     gio set "$f" metadata::trusted yes 2>/dev/null || true
@@ -223,7 +220,7 @@ chmod +x /home/colabuser/Desktop/*.desktop 2>/dev/null || true
 for f in /home/colabuser/Desktop/*.desktop; do
     gio set "$f" metadata::trusted yes 2>/dev/null || true
 done
-chown -R colabuser:colabuser /home/colabuser
+chown -R colabuser:colabuser /home/colabuser 2>/dev/null || true
 
 # 5. Xvfb 画面 & 超低遅延音同期エンジンの起動
 echo ">> [5/5] Xvfb 仮想ディスプレイ (${SCREEN_RES}) & Web Audio 音同期エンジンの起動..."
@@ -234,7 +231,6 @@ if ! pgrep -f "Xvfb :1" > /dev/null 2>&1; then
     sleep 2
 fi
 
-# Xfce4 デフォルトパネル設定
 mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml /home/colabuser/.config/xfce4/xfconf/xfce-perchannel-xml
 cp -r /etc/xdg/xfce4/panel/default.xml /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml 2>/dev/null || true
 cp -r /etc/xdg/xfce4/panel/default.xml /home/colabuser/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml 2>/dev/null || true
@@ -403,3 +399,4 @@ sleep 2
 echo "=================================================="
 echo "🎉 デスクトップ環境のセットアップが完了しました！"
 echo "=================================================="
+exit 0
