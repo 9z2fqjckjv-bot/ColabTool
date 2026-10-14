@@ -62,12 +62,11 @@ done
 echo ">> [4/4] リモート接続方式の構成..."
 if [ -n "$CRD_CODE" ]; then
     echo "Chrome Remote Desktop を構成中..."
-    if ! dpkg -s chrome-remote-desktop > /dev/null 2>&1; then
-        echo "chrome-remote-desktop パッケージをダウンロード＆インストール中..."
-        wget -q -O /tmp/crd.deb https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
-        apt-get install -y -qq /tmp/crd.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1
-        rm -f /tmp/crd.deb
+    if ! python3 -c "import dbus" > /dev/null 2>&1; then
+        echo "python3-dbus パッケージをインストール中..."
+        apt-get install -y -qq python3-dbus python3-gi libdbus-1-3 > /dev/null 2>&1 || true
     fi
+
     # colabuserの存在確認・設定 (CRDはroot実行不可のため)
     if ! id -u colabuser >/dev/null 2>&1; then
         useradd -m -s /bin/bash -G sudo,chrome-remote-desktop colabuser
@@ -93,7 +92,7 @@ if [ -n "$CRD_CODE" ]; then
 
     echo "CRD ホスト起動を実行中 (ユーザー: colabuser)..."
     sudo -u colabuser bash -c "$CMD" > /content/crd_setup.log 2>&1 || true
-    service chrome-remote-desktop restart > /dev/null 2>&1 || sudo -u colabuser /opt/google/chrome-remote-desktop/chrome-remote-desktop --start > /dev/null 2>&1 || true
+    sudo -u colabuser /opt/google/chrome-remote-desktop/chrome-remote-desktop --start > /dev/null 2>&1 || true
     echo "✅ Chrome Remote Desktop を構成・起動しました (ログ: /content/crd_setup.log)"
     tail -n 10 /content/crd_setup.log 2>/dev/null || true
 fi

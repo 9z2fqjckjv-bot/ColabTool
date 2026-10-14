@@ -25,6 +25,7 @@ apt-get install -y -qq \
     pulseaudio pulseaudio-utils alsa-utils pavucontrol \
     libgl1-mesa-glx mesa-utils libvulkan1 vulkan-tools \
     ffmpeg jq curl wget git zstd htop \
+    python3-dbus python3-gi libdbus-1-3 \
     openjdk-21-jdk-headless > /dev/null 2>&1
 
 # 3. Google Chrome & Chrome Remote Desktop のインストール
