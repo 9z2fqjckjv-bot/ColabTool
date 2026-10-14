@@ -51,9 +51,12 @@ Google Colabの **NVIDIA L4 GPU (24GB VRAM) & ハイメモリ (53GB RAM)** を�
 3. **ステップ 1: 【ワンクリック起動】** を実行します（約1〜2分で環境構築・起動が完了し、セルが終了します）。
 4. セル実行結果に表示されるカードから接続します：
    - **noVNC の場合**: 表示されたリンクをクリックすると、ブラウザ内にデスクトップが開きます。
-   - **Chrome Remote Desktop の場合**: 事前に [remotedesktop.google.com/headless](https://remotedesktop.google.com/headless) で取得したコードを入力して起動し、Remote Desktopから接続します。
+   - **Chrome Remote Desktop の場合**: 
+     - [remotedesktop.google.com/headless](https://remotedesktop.google.com/headless) でDebian Linux用のコードを取得します。
+     - ステップ1の `CRD_AUTH_CODE` に貼り付けて起動するか、起動後に **「ステップ 2」** を実行して認証コードを入力・有効化します。
+     - 手元のChromeリモートデスクトップアプリから接続します（PIN: 123456）。
    - **Minecraft サーバー**: 表示された外部アドレスを手元のMinecraftに入力して参加できます。
-5. プレイ終了時は、**ステップ 5: 【ワンクリック安全停止】** を実行すると、全セーブデータと録画がGoogle Driveへ安全に保存されます。
+5. プレイ終了時は、**ステップ 6: 【ワンクリック安全停止】** を実行すると、全セーブデータと録画がGoogle Driveへ安全に保存されます。
 
 ---
 

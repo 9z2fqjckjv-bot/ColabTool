@@ -62,8 +62,29 @@ done
 echo ">> [4/4] リモート接続方式の構成..."
 if [ -n "$CRD_CODE" ]; then
     echo "Chrome Remote Desktop を構成中..."
-    su - -c "$CRD_CODE --pin=$CRD_PIN" || eval "$CRD_CODE --pin=$CRD_PIN" || true
-    echo "✅ Chrome Remote Desktop を有効化しました。"
+    if ! dpkg -s chrome-remote-desktop > /dev/null 2>&1; then
+        echo "chrome-remote-desktop パッケージをダウンロード＆インストール中..."
+        wget -q -O /tmp/crd.deb https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+        apt-get install -y -qq /tmp/crd.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1
+        rm -f /tmp/crd.deb
+    fi
+    mkdir -p /root/.config/chrome-remote-desktop
+    echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /root/.chrome-remote-desktop-session
+    chmod +x /root/.chrome-remote-desktop-session
+
+    # コマンド判定（全文コピーか、認証コード単体か）
+    if [[ "$CRD_CODE" == *"start-host"* ]]; then
+        CMD="$CRD_CODE"
+        if [[ "$CMD" != *"--pin="* ]]; then
+            CMD="$CMD --pin=$CRD_PIN"
+        fi
+    else
+        CMD="DISPLAY= /opt/google/chrome-remote-desktop/start-host --code=\"$CRD_CODE\" --redirect-url=\"https://remotedesktop.google.com/_/oauthredirect\" --name=\$(hostname) --pin=$CRD_PIN"
+    fi
+
+    echo "CRD ホスト起動を実行中..."
+    eval "$CMD" > /content/crd_setup.log 2>&1 || true
+    echo "✅ Chrome Remote Desktop を構成しました (ログ: /content/crd_setup.log)"
 fi
 
 echo ""

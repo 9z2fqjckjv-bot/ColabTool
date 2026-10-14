@@ -27,13 +27,23 @@ apt-get install -y -qq \
     ffmpeg jq curl wget git zstd htop \
     openjdk-21-jdk-headless > /dev/null 2>&1
 
-# 3. Google Chrome のインストール（マルチプロファイル対応）
-echo ">> [3/8] Google Chrome の確認 & インストール..."
+# 3. Google Chrome & Chrome Remote Desktop のインストール
+echo ">> [3/8] Google Chrome & Chrome Remote Desktop の確認 & インストール..."
 if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
     wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
     apt-get install -y -qq /tmp/chrome.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1
     rm -f /tmp/chrome.deb
 fi
+
+if ! dpkg -s chrome-remote-desktop > /dev/null 2>&1; then
+    wget -q -O /tmp/crd.deb https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+    apt-get install -y -qq /tmp/crd.deb > /dev/null 2>&1 || apt-get install -f -y -qq > /dev/null 2>&1
+    rm -f /tmp/crd.deb
+fi
+
+mkdir -p /root/.config/chrome-remote-desktop
+echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > /root/.chrome-remote-desktop-session
+chmod +x /root/.chrome-remote-desktop-session
 
 # 4. Steam のインストール
 echo ">> [4/8] Steam の確認 & インストール..."
