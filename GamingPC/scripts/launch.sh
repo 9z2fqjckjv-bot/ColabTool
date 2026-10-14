@@ -1,14 +1,13 @@
 #!/bin/bash
 # ==============================================================================
-# launch.sh - Ultra-Fast & Cached One-Click Launch for Colab Gaming PC
-# (Includes Japanese UI, MacBook 16:10, Ultra-Sync Audio, and MacBook Hardware Bridge)
+# launch.sh - Ultra-Fast, Noise-Free, Real-Time Audio & MacBook Native Gaming PC
 # ==============================================================================
 
 export DEBIAN_FRONTEND=noninteractive
 SCREEN_RES="${1:-1680x1050}" # MacBook 16:10 デフォルト
 
 echo "=================================================="
-echo "  🎮 Gaming PC 仮想環境（日本語・音同期・MacBookハードウェア直結）"
+echo "  🎮 Gaming PC 仮想環境（日本語・ノイズゼロ音同期・MacBook最適化）"
 echo "  画面解像度: ${SCREEN_RES}"
 echo "=================================================="
 
@@ -52,17 +51,33 @@ fi
 usermod -aG video,audio,render colabuser 2>/dev/null || true
 xhost +local: > /dev/null 2>&1 || xhost + > /dev/null 2>&1 || true
 
-# PulseAudio 仮想スピーカー & 仮想マイク (MacBook パススルー用) の初期化
-pulseaudio -D --exit-idle-time=-1 2>/dev/null || true
-pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink 2>/dev/null || true
-pactl set-default-sink VirtualSink 2>/dev/null || true
+# PulseAudio 音量変更時のクリッピングノイズ防止設定 (flat-volumes = no)
+mkdir -p /root/.config/pulse /home/colabuser/.config/pulse
+cat << 'EOF' > /root/.config/pulse/daemon.conf
+flat-volumes = no
+default-sample-rate = 44100
+avoid-resampling = yes
+EOF
+cp /root/.config/pulse/daemon.conf /home/colabuser/.config/pulse/daemon.conf 2>/dev/null || true
 
-# MacBook マイク入力用 FIFO パイプ & 仮想マイクソース
-FIFO_MIC="/tmp/virtual_mic.fifo"
-rm -f "$FIFO_MIC"
-mkfifo "$FIFO_MIC" 2>/dev/null || true
-pactl load-module module-pipe-source source_name=VirtualMic file="$FIFO_MIC" format=s16le rate=44100 channels=1 2>/dev/null || true
-pactl set-default-source VirtualMic 2>/dev/null || true
+# pavucontrol 表示設定の最適化
+mkdir -p /root/.config /home/colabuser/.config
+echo -e "[pavucontrol]\nsink-type=0\nsource-type=0\n" > /root/.config/pavucontrol.ini
+cp /root/.config/pavucontrol.ini /home/colabuser/.config/pavucontrol.ini 2>/dev/null || true
+
+# PulseAudio 仮想オーディオデバイスの初期化
+pulseaudio -D --exit-idle-time=-1 2>/dev/null || true
+
+pactl unload-module $(pactl list short modules | grep "MacBookNeo" | awk '{print $1}') 2>/dev/null || true
+pactl unload-module $(pactl list short modules | grep "VirtualSink" | awk '{print $1}') 2>/dev/null || true
+
+pactl load-module module-null-sink \
+    sink_name=MacBookNeo_Audio \
+    sink_properties="device.description='MacBookNeo\ Audio\ (内蔵スピーカー/AirPods)' device.class='sound' device.icon_name='audio-card'" 2>/dev/null || true
+
+pactl set-default-sink MacBookNeo_Audio 2>/dev/null || true
+pactl set-sink-volume MacBookNeo_Audio 100% 2>/dev/null || true
+pactl set-sink-mute MacBookNeo_Audio 0 2>/dev/null || true
 
 # 3. ブラウザ & ゲームソフトの導入（未導入時のみダウンロード）
 echo ">> [3/6] Google Chrome, Steam, Prism Launcher (Minecraft), Discord の確認..."
@@ -247,7 +262,6 @@ if ! pgrep -f "Xvfb :1" > /dev/null 2>&1; then
     sleep 2
 fi
 
-# Apple Keyboard / Trackpad ハードウェアマッピング
 setxkbmap -display :1 -model macbook79 -layout jp 2>/dev/null || setxkbmap -display :1 -layout jp 2>/dev/null || true
 cat << 'EOF' > /root/.Xmodmap
 clear mod4
@@ -270,19 +284,18 @@ if ! pgrep -f "xfce4-session" > /dev/null 2>&1; then
     sleep 2
 fi
 
-# 6. 超低遅延音同期 (8000) & MacBook マイクブリッジ (8001) の起動
-echo ">> [6/6] 超低遅延音同期 & MacBook マイクブリッジの起動..."
-fuser -k 8000/tcp 8001/tcp 2>/dev/null || true
+# 6. 超低遅延・高音質ストリーミングサーバー (ポート 8000)
+echo ">> [6/6] 超低遅延・高音質ストリーミングサーバーの起動..."
+fuser -k 8000/tcp 2>/dev/null || true
 
-# 音声出力サーバー (VirtualSink -> ブラウザスピーカー)
 cat << 'EOF' > /content/audio_stream.py
 import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
-class UltraLowLatencyHandler(BaseHTTPRequestHandler):
+class SmoothLiveAudioHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-Type', 'application/octet-stream')
+        self.send_header('Content-Type', 'audio/mpeg')
         self.send_header('Cache-Control', 'no-cache, no-store, must-revalidate')
         self.send_header('Pragma', 'no-cache')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -290,14 +303,15 @@ class UltraLowLatencyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         
         cmd = [
-            "ffmpeg", "-f", "pulse", "-i", "VirtualSink.monitor",
-            "-ac", "2", "-ar", "44100", "-f", "s16le",
-            "-bufsize", "1024", "-fflags", "nobuffer", "-flush_packets", "1", "-"
+            "ffmpeg", "-f", "pulse", "-i", "@DEFAULT_SINK@.monitor",
+            "-ac", "2", "-ar", "44100", "-c:a", "libmp3lame", "-b:a", "192k",
+            "-bufsize", "4k", "-fflags", "nobuffer", "-flush_packets", "1",
+            "-f", "mp3", "-"
         ]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=512)
         try:
             while True:
-                chunk = proc.stdout.read(2048)
+                chunk = proc.stdout.read(1024)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
@@ -306,46 +320,10 @@ class UltraLowLatencyHandler(BaseHTTPRequestHandler):
         finally:
             proc.kill()
 
-httpd = HTTPServer(('0.0.0.0', 8000), UltraLowLatencyHandler)
+httpd = HTTPServer(('0.0.0.0', 8000), SmoothLiveAudioHandler)
 httpd.serve_forever()
 EOF
 nohup python3 /content/audio_stream.py > /dev/null 2>&1 &
-
-# マイク入力ブリッジ (ブラウザマイク -> Linux VirtualMic)
-cat << 'EOF' > /content/macbook_mic_bridge.py
-import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-FIFO_PATH = "/tmp/virtual_mic.fifo"
-
-class MicBridgeHandler(BaseHTTPRequestHandler):
-    def do_POST(self):
-        if self.path == "/mic_input":
-            length = int(self.headers.get('Content-Length', 0))
-            data = self.rfile.read(length)
-            try:
-                with open(FIFO_PATH, "wb", buffering=0) as f:
-                    f.write(data)
-            except Exception:
-                pass
-            self.send_response(200)
-            self.send_header('Access-Control-Allow-Origin', '*')
-            self.end_headers()
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
-        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
-        self.end_headers()
-
-httpd = HTTPServer(('0.0.0.0', 8001), MicBridgeHandler)
-httpd.serve_forever()
-EOF
-nohup python3 /content/macbook_mic_bridge.py > /dev/null 2>&1 &
 
 # x11vnc & websockify 起動
 fuser -k 5901/tcp 6080/tcp 2>/dev/null || true
@@ -356,7 +334,7 @@ NOVNC_DIR="/usr/share/novnc"
 [ -d "$NOVNC_DIR" ] || NOVNC_DIR="/usr/local/share/novnc"
 [ -f "$NOVNC_DIR/index.html" ] && [ ! -f "$NOVNC_DIR/vnc.html" ] && ln -sf "$NOVNC_DIR/index.html" "$NOVNC_DIR/vnc.html"
 
-# noVNC の HTML に Web Audio リアルタイム音同期 ＆ MacBook マイクボタンを注入
+# noVNC の HTML に 完全不可視・ノイズゼロ スムーズ同期エンジンを注入
 python3 - << 'PYEOF'
 import os, re
 novnc_dir = "/usr/share/novnc" if os.path.exists("/usr/share/novnc") else "/usr/local/share/novnc"
@@ -366,145 +344,51 @@ if os.path.exists(target_html):
     with open(target_html, "r", encoding="utf-8") as f:
         content = f.read()
 
-    hardware_ui_script = '''
-<!-- ANTIGRAVITY MACBOOK HARDWARE INTEGRATION -->
-<div id="live-audio-bar" style="position: fixed; top: 12px; right: 80px; z-index: 99999; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); border: 1px solid rgba(56, 189, 248, 0.5); border-radius: 30px; padding: 6px 16px; display: flex; align-items: center; gap: 10px; color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); user-select: none;">
-  <span id="audio-toggle" style="cursor: pointer; font-size: 16px;" title="クリックで消音/解除">🔊</span>
-  <span style="font-weight: bold; color: #38bdf8; font-size: 11px; letter-spacing: 0.5px;">LIVE SOUND</span>
-  <input id="audio-volume" type="range" min="0" max="1" step="0.05" value="0.8" style="width: 60px; cursor: pointer; accent-color: #38bdf8;">
-  <span id="mic-toggle-btn" style="cursor: pointer; font-size: 11px; font-weight: bold; color: #94a3b8; border: 1px solid #475569; padding: 2px 8px; border-radius: 12px; margin-left: 4px;" title="MacBookの内蔵マイクを仮想環境に接続">🎙️ MIC OFF</span>
-</div>
+    smooth_script = '''
+<!-- ANTIGRAVITY SMOOTH SYNC AUDIO -->
 <script>
 (function() {
-  let audioCtx = null, gainNode = null, isRunning = false, nextStartTime = 0;
-  const toggleBtn = document.getElementById('audio-toggle');
-  const volumeSlider = document.getElementById('audio-volume');
-  const micBtn = document.getElementById('mic-toggle-btn');
-  let currentVolume = 0.8;
-  let micActive = false, micStream = null, micAudioCtx = null;
+  const audioUrl = window.location.origin.replace(/^https?:\\/\\/6080-/, (m) => m.replace('6080-', '8000-')) + '/stream';
+  const audio = new Audio(audioUrl);
+  audio.volume = 1.0;
+  let isStarted = false;
 
-  async function initWebAudio() {
-    if (isRunning) return;
-    isRunning = true;
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive', sampleRate: 44100 });
-    gainNode = audioCtx.createGain();
-    gainNode.gain.value = currentVolume;
-    gainNode.connect(audioCtx.destination);
-    nextStartTime = audioCtx.currentTime;
-
-    const audioUrl = window.location.origin.replace(/^https?:\\/\\/6080-/, (m) => m.replace('6080-', '8000-')) + '/stream';
-
-    try {
-      const response = await fetch(audioUrl);
-      const reader = response.body.getReader();
-
-      while (isRunning) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const int16 = new Int16Array(value.buffer, value.byteOffset, Math.floor(value.byteLength / 2));
-        const numSamples = Math.floor(int16.length / 2);
-        if (numSamples === 0) continue;
-
-        const buffer = audioCtx.createBuffer(2, numSamples, 44100);
-        const left = buffer.getChannelData(0);
-        const right = buffer.getChannelData(1);
-
-        for (let i = 0; i < numSamples; i++) {
-          left[i] = int16[i * 2] / 32768;
-          right[i] = int16[i * 2 + 1] / 32768;
-        }
-
-        const source = audioCtx.createBufferSource();
-        source.buffer = buffer;
-        source.connect(gainNode);
-
-        if (nextStartTime < audioCtx.currentTime - 0.05) {
-          nextStartTime = audioCtx.currentTime;
-        }
-        source.start(nextStartTime);
-        nextStartTime += buffer.duration;
-      }
-    } catch (e) {
-      isRunning = false;
-    }
+  function startAudio() {
+    if (isStarted) return;
+    isStarted = true;
+    audio.play().then(() => {
+      console.log('Smooth live audio running');
+    }).catch(() => {
+      isStarted = false;
+    });
   }
 
-  // MacBook 内蔵マイクのトグル
-  async function toggleMic() {
-    const micUrl = window.location.origin.replace(/^https?:\\/\\/6080-/, (m) => m.replace('6080-', '8001-')) + '/mic_input';
-    if (!micActive) {
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
-        micAudioCtx = new AudioContext({ sampleRate: 44100 });
-        const source = micAudioCtx.createMediaStreamSource(micStream);
-        const processor = micAudioCtx.createScriptProcessor(4096, 1, 1);
+  // シークを行わず再生速度の微調整（1.06倍速/0.98倍速）のみで常にリアルタイムを維持（ノイズゼロ）
+  setInterval(() => {
+    if (!audio.paused && audio.buffered.length > 0) {
+      const liveEnd = audio.buffered.end(audio.buffered.length - 1);
+      const latency = liveEnd - audio.currentTime;
 
-        processor.onaudioprocess = (e) => {
-          if (!micActive) return;
-          const input = e.inputBuffer.getChannelData(0);
-          const pcm16 = new Int16Array(input.length);
-          for (let i = 0; i < input.length; i++) {
-            pcm16[i] = Math.max(-1, Math.min(1, input[i])) * 32767;
-          }
-          fetch(micUrl, { method: 'POST', body: pcm16.buffer }).catch(() => {});
-        };
-
-        source.connect(processor);
-        processor.connect(micAudioCtx.destination);
-        micActive = true;
-        micBtn.textContent = '🎙️ MIC ON';
-        micBtn.style.color = '#10b981';
-        micBtn.style.borderColor = '#10b981';
-      } catch (err) {
-        alert('MacBookのマイクアクセス許可が必要です: ' + err.message);
+      if (latency > 0.08) {
+        audio.playbackRate = 1.06;
+      } else if (latency < 0.03) {
+        audio.playbackRate = 0.98;
+      } else {
+        audio.playbackRate = 1.0;
       }
-    } else {
-      if (micStream) micStream.getTracks().forEach(t => t.stop());
-      if (micAudioCtx) micAudioCtx.close();
-      micActive = false;
-      micBtn.textContent = '🎙️ MIC OFF';
-      micBtn.style.color = '#94a3b8';
-      micBtn.style.borderColor = '#475569';
     }
-  }
+  }, 150);
 
-  document.addEventListener('click', () => {
-    if (!audioCtx || audioCtx.state === 'suspended') {
-      if (audioCtx) audioCtx.resume();
-      initWebAudio();
-    }
-  }, { once: true });
-
-  toggleBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!gainNode) return;
-    if (gainNode.gain.value > 0) {
-      gainNode.gain.value = 0;
-      toggleBtn.textContent = '🔇';
-    } else {
-      gainNode.gain.value = currentVolume;
-      toggleBtn.textContent = '🔊';
-    }
-  });
-
-  volumeSlider.addEventListener('input', (e) => {
-    e.stopPropagation();
-    currentVolume = parseFloat(e.target.value);
-    if (gainNode) gainNode.gain.value = currentVolume;
-    toggleBtn.textContent = currentVolume === 0 ? '🔇' : '🔊';
-  });
-
-  micBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    toggleMic();
-  });
+  window.addEventListener('load', startAudio);
+  document.addEventListener('click', startAudio, { once: true });
+  document.addEventListener('keydown', startAudio, { once: true });
+  startAudio();
 })();
 </script>
-<!-- END ANTIGRAVITY MACBOOK HARDWARE INTEGRATION -->
+<!-- END ANTIGRAVITY SMOOTH SYNC AUDIO -->
 '''
     content = re.sub(r'<!-- ANTIGRAVITY.*?END ANTIGRAVITY.*?-->', '', content, flags=re.DOTALL)
-    content = content.replace("</body>", f"{hardware_ui_script}\n</body>")
+    content = content.replace("</body>", f"{smooth_script}\n</body>")
     with open(target_html, "w", encoding="utf-8") as f:
         f.write(content)
 PYEOF
@@ -513,6 +397,6 @@ nohup websockify --web="$NOVNC_DIR" 6080 127.0.0.1:5901 > /content/novnc.log 2>&
 sleep 2
 
 echo "=================================================="
-echo "🎉 デスクトップ＆MacBookハードウェア直結環境が起動しました！"
+echo "🎉 デスクトップ＆完全リアルタイム音同期環境が起動しました！"
 echo "=================================================="
 exit 0
