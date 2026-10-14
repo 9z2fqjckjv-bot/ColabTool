@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# launch.sh - Robust & Safe One-Click Launch for Colab Gaming PC
+# launch.sh - Ultra-Fast & Cached One-Click Launch for Colab Gaming PC
 # ==============================================================================
 
 export DEBIAN_FRONTEND=noninteractive
@@ -16,21 +16,25 @@ echo ">> [1/5] 日本標準時 (Asia/Tokyo) & 日本語フォント設定..."
 ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime 2>/dev/null || true
 echo "Asia/Tokyo" > /etc/timezone 2>/dev/null || true
 
-dpkg --add-architecture i386 2>/dev/null || true
-apt-get update -qq 2>/dev/null || true
+# 必要なパッケージの導入（インストール済みならスキップして高速化）
+if ! which xfce4-session >/dev/null 2>&1 || [ ! -f /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc ]; then
+    echo "    📦 基本デスクトップ・日本語フォントをインストール中..."
+    dpkg --add-architecture i386 2>/dev/null || true
+    apt-get update -qq 2>/dev/null || true
+    apt-get install -y -qq \
+        locales fonts-noto-cjk fonts-noto-color-emoji fonts-ipafont-gothic \
+        xfce4 xfce4-terminal dbus-x11 x11-xserver-utils x11-utils xterm \
+        xvfb x11vnc websockify novnc \
+        pulseaudio pulseaudio-utils alsa-utils pavucontrol \
+        libgl1-mesa-dri libglx-mesa0 libgl1 mesa-utils libvulkan1 vulkan-tools \
+        ffmpeg jq curl wget git zstd htop \
+        openjdk-21-jre-headless 2>/dev/null || true
+    locale-gen ja_JP.UTF-8 2>/dev/null || true
+    update-locale LANG=ja_JP.UTF-8 2>/dev/null || true
+else
+    echo "    ✅ 基本パッケージは既にインストール済みです（スキップ）"
+fi
 
-# 必要なパッケージの一括インストール（非停止・堅牢化）
-apt-get install -y -qq \
-    locales fonts-noto-cjk fonts-noto-color-emoji fonts-ipafont-gothic \
-    xfce4 xfce4-goodies xfce4-terminal dbus-x11 x11-xserver-utils x11-utils xterm \
-    xvfb x11vnc websockify novnc \
-    pulseaudio pulseaudio-utils alsa-utils pavucontrol \
-    libgl1-mesa-dri libglx-mesa0 libgl1 mesa-utils libvulkan1 vulkan-tools \
-    ffmpeg jq curl wget git zstd htop \
-    openjdk-21-jre-headless 2>/dev/null || true
-
-locale-gen ja_JP.UTF-8 2>/dev/null || true
-update-locale LANG=ja_JP.UTF-8 2>/dev/null || true
 pip install -q websockify 2>/dev/null || true
 
 export LANG=ja_JP.UTF-8
@@ -52,11 +56,12 @@ pulseaudio -D --exit-idle-time=-1 2>/dev/null || true
 pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink 2>/dev/null || true
 pactl set-default-sink VirtualSink 2>/dev/null || true
 
-# 3. ブラウザ & ゲームソフトの導入
-echo ">> [3/5] Google Chrome, Steam, Prism Launcher (Minecraft), Discord の導入..."
+# 3. ブラウザ & ゲームソフトの導入（未導入時のみダウンロード）
+echo ">> [3/5] Google Chrome, Steam, Prism Launcher (Minecraft), Discord の確認..."
 
 # Google Chrome
 if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
+    echo "    📦 Google Chrome をダウンロード中..."
     wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb || true
     apt-get install -y -qq /tmp/chrome.deb 2>/dev/null || apt-get install -f -y -qq 2>/dev/null || true
     rm -f /tmp/chrome.deb 2>/dev/null || true
@@ -69,6 +74,7 @@ chmod +x /usr/local/bin/google-chrome-colab 2>/dev/null || true
 
 # Steam
 if ! which steam > /dev/null 2>&1 && [ ! -f /usr/games/steam ]; then
+    echo "    📦 Steam をダウンロード中..."
     wget -q -O /tmp/steam.deb "https://cdn.cloudflare.steamstatic.com/client/installer/steam.deb" 2>/dev/null || true
     if [ -f /tmp/steam.deb ]; then
         dpkg -i /tmp/steam.deb 2>/dev/null || apt-get install -f -y -qq 2>/dev/null || true
@@ -85,6 +91,7 @@ chmod +x /usr/local/bin/steam-colab 2>/dev/null || true
 
 # Discord
 if ! which discord > /dev/null 2>&1; then
+    echo "    📦 Discord をダウンロード中..."
     wget -q -O /tmp/discord.deb "https://discord.com/api/download?platform=linux&format=deb" 2>/dev/null || true
     if [ -f /tmp/discord.deb ]; then
         apt-get install -y -qq /tmp/discord.deb 2>/dev/null || apt-get install -f -y -qq 2>/dev/null || true
@@ -100,6 +107,7 @@ chmod +x /usr/local/bin/discord-colab 2>/dev/null || true
 # Prism Launcher (Minecraft)
 mkdir -p /opt/prismlauncher
 if [ ! -f /opt/prismlauncher/prismlauncher.AppImage ]; then
+    echo "    📦 Prism Launcher をダウンロード中..."
     curl -sSL -o /opt/prismlauncher/prismlauncher.AppImage "https://github.com/PrismLauncher/PrismLauncher/releases/download/8.4/PrismLauncher-Linux-8.4-x86_64.AppImage" 2>/dev/null || \
     curl -sSL -o /opt/prismlauncher/prismlauncher.AppImage "https://github.com/PrismLauncher/PrismLauncher/releases/latest/download/PrismLauncher-Linux-x86_64.AppImage" 2>/dev/null || true
     chmod +x /opt/prismlauncher/prismlauncher.AppImage 2>/dev/null || true
