@@ -92,6 +92,146 @@ function isBlockOpen(block) {
 }
 
 /**
+ * 拠点のドア（出入り口）を探索し、出入り口ペア（ドア位置、外側座標、内側座標）を返す
+ * 直線移動ではなく、ドアを正規の出入り口として認識させるためのWaypoint生成
+ */
+function findBaseDoors(bot, basePos) {
+  const { Vec3 } = require('vec3');
+  try {
+    const doorPositions = bot.findBlocks({
+      matching: block => isDoorOrGate(block),
+      maxDistance: 32,
+      count: 12
+    });
+
+    const doors = [];
+    for (const pos of doorPositions) {
+      const block = bot.blockAt(pos);
+      if (!block) continue;
+      // 2マスのドアの場合、下側（lower）のみを代表として扱う
+      const props = (typeof block.getProperties === 'function') ? block.getProperties() : (block._properties || {});
+      if (props.half === 'upper') continue;
+
+      const offsets = [
+        new Vec3(1, 0, 0),
+        new Vec3(-1, 0, 0),
+        new Vec3(0, 0, 1),
+        new Vec3(0, 0, -1)
+      ];
+
+      let outsidePos = null;
+      let insidePos = null;
+      let maxDist = -1;
+      let minDist = 99999;
+
+      for (const off of offsets) {
+        const checkPos = pos.plus(off);
+        const standBlock = bot.blockAt(checkPos);
+        const groundBlock = bot.blockAt(checkPos.offset(0, -1, 0));
+        // 通行可能（足元が空気/透過、床が固体）
+        if (standBlock && (standBlock.name === 'air' || standBlock.boundingBox === 'empty') &&
+            groundBlock && groundBlock.boundingBox === 'block') {
+          const d = checkPos.distanceTo(basePos);
+          if (d > maxDist) {
+            maxDist = d;
+            outsidePos = checkPos;
+          }
+          if (d < minDist) {
+            minDist = d;
+            insidePos = checkPos;
+          }
+        }
+      }
+
+      if (outsidePos && insidePos && !outsidePos.equals(insidePos)) {
+        doors.push({ block, pos, outsidePos, insidePos });
+      }
+    }
+
+    if (doors.length > 0) {
+      doors.sort((a, b) => a.pos.distanceTo(basePos) - b.pos.distanceTo(basePos));
+      return doors;
+    }
+  } catch (_) {}
+  return [];
+}
+
+/**
+ * 出入り口（ドア）を経由して安全に部屋に入室または退室する
+ * enter === true: 外側 -> ドアを開けて通過 -> 内側（入室）
+ * enter === false: 内側 -> ドアを開けて通過 -> 外側（退室）
+ * （ドア以外から部屋に入ったり出たりするのを防ぐ）
+ */
+async function navigateThroughDoor(bot, enter = true) {
+  if (!bot.entity) return false;
+  const botName = bot.username;
+  const basePos = findBaseLocation(bot);
+  const doors = findBaseDoors(bot, basePos);
+  if (doors.length === 0) return false;
+
+  const targetDoor = doors[0];
+  const startWaypoint = enter ? targetDoor.outsidePos : targetDoor.insidePos;
+  const endWaypoint = enter ? targetDoor.insidePos : targetDoor.outsidePos;
+
+  try {
+    console.log(`🚪 [${botName}] 出入り口ドア経由で${enter ? '部屋へ入室' : '部屋から屋外へ退室'}します...`);
+    // 1. まずドア手前のウェイポイントへ移動
+    bot.pathfinder.setGoal(new goals.GoalNear(startWaypoint.x, startWaypoint.y, startWaypoint.z, 0.8));
+    const startApproach = Date.now();
+    while (bot.entity && bot.entity.position.distanceTo(startWaypoint) > 1.2) {
+      if (Date.now() - startApproach > 12000) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // 2. ドアの開閉状態を確認し、閉じている場合は開ける
+    const doorBlock = bot.blockAt(targetDoor.pos);
+    if (doorBlock && isDoorOrGate(doorBlock)) {
+      if (!isBlockOpen(doorBlock)) {
+        await bot.lookAt(targetDoor.pos.offset(0.5, 0.5, 0.5));
+        await bot.activateBlock(doorBlock);
+        await new Promise(r => setTimeout(r, 250));
+        console.log(`🚪 [${botName}] 閉じていたドアを開けました。`);
+      }
+    }
+
+    // 3. ドアを通過して反対側のウェイポイントへ移動
+    bot.pathfinder.setGoal(new goals.GoalNear(endWaypoint.x, endWaypoint.y, endWaypoint.z, 0.6));
+    const passApproach = Date.now();
+    while (bot.entity && bot.entity.position.distanceTo(endWaypoint) > 1.0) {
+      if (Date.now() - passApproach > 8000) break;
+      await new Promise(r => setTimeout(r, 200));
+    }
+
+    // 4. 通過後にドアを振り返って閉める（防犯・モンスター侵入防止）
+    const passedDoorBlock = bot.blockAt(targetDoor.pos);
+    if (passedDoorBlock && isDoorOrGate(passedDoorBlock) && isBlockOpen(passedDoorBlock)) {
+      await bot.lookAt(targetDoor.pos.offset(0.5, 0.5, 0.5));
+      await bot.activateBlock(passedDoorBlock);
+      console.log(`🚪 [${botName}] 通過後にドアを閉めました（防犯戸締まり完了）。`);
+    }
+
+    return true;
+  } catch (err) {
+    console.warn(`[${botName}] ドア通過ナビゲーション注意:`, err.message);
+    return false;
+  }
+}
+
+/**
+ * 敵対モブ判定ヘルパー
+ */
+function isHostileMob(entity) {
+  if (!entity || !entity.name) return false;
+  const n = entity.name.toLowerCase();
+  const hostileNames = [
+    'zombie', 'skeleton', 'spider', 'creeper', 'witch', 'enderman',
+    'drowned', 'husk', 'stray', 'cave_spider', 'slime', 'phantom',
+    'pillager', 'vindicator', 'ravager', 'evoker', 'vex', 'silverfish'
+  ];
+  return hostileNames.some(h => n.includes(h)) || entity.kind === 'Hostile';
+}
+
+/**
  * 個別および統合の行動日誌記録
  */
 function recordDiary(botName, actionType, detail, pos = null) {
@@ -447,6 +587,64 @@ async function toggleNearbyDoors(bot, closeOnly = false) {
 }
 
 /**
+ * 斧や剣などのツールで敵対モブを倒す戦闘迎撃ルーチン
+ * ゾンビ・スケルトン・クモ・クリーパーなどのモンスターを検知して最強武器で撃退
+ */
+async function engageHostileMob(bot, hostile) {
+  if (!bot.entity || !hostile || !hostile.isValid) return;
+  const botName = bot.username;
+
+  try {
+    // 1. 最適な武器（剣または斧）を即時装備
+    await autoEquipAll(bot, 'combat');
+
+    console.log(`⚔️ [${botName}] 敵対モブ「${hostile.name}」を迎撃！斧/剣を構えて戦闘を開始します。`);
+    recordDiary(botName, '戦闘開始', `武器（斧/剣）を構えて敵対モブ「${hostile.name}」の討伐を開始しました。`, bot.entity.position);
+
+    if (bot.pvp) {
+      bot.pvp.attack(hostile);
+
+      // モンスターが倒されるか見失うまで追跡・戦闘（最大15秒）
+      const startCombat = Date.now();
+      while (hostile && hostile.isValid && hostile.health > 0) {
+        if (!bot.entity || bot.isSleeping) break;
+        if (Date.now() - startCombat > 15000) break;
+        if (bot.entity.position.distanceTo(hostile.position) > 18) break; // 遠すぎたら追跡中断
+
+        // クリーパー自爆回避: 距離2.8m以内のクリーパーに対してヒット＆アウェイ
+        if (hostile.name.includes('creeper')) {
+          const dist = bot.entity.position.distanceTo(hostile.position);
+          if (dist < 3.0) {
+            bot.setControlState('back', true);
+            await new Promise(r => setTimeout(r, 350));
+            bot.setControlState('back', false);
+          }
+        }
+
+        await new Promise(r => setTimeout(r, 250));
+      }
+
+      bot.pvp.stop();
+      if (!hostile.isValid || hostile.health <= 0) {
+        console.log(`🏆 [${botName}] 敵対モブ「${hostile.name}」を討伐しました！`);
+        recordDiary(botName, '討伐完了', `敵対モブ「${hostile.name}」を無事に討伐しました！安全を確保。`, bot.entity.position);
+        // ドロップアイテムの回収
+        setTimeout(() => {
+          if (!bot.entity) return;
+          const drop = bot.nearestEntity(e => (e.name === 'item' || e.type === 'object') && e.position.distanceTo(bot.entity.position) < 6);
+          if (drop && bot.pathfinder) {
+            bot.pathfinder.setGoal(new goals.GoalNear(drop.position.x, drop.position.y, drop.position.z, 0.5));
+          }
+        }, 400);
+      }
+    }
+  } catch (err) {
+    console.warn(`[${botName}] 戦闘処理エラー:`, err.message);
+    if (bot.pvp) bot.pvp.stop();
+  }
+}
+
+/**
  * 障害物迂回・スマート脱出ループ (Smart Obstacle Bypass & Detour System)
  * 進行方向にブロックや段差などの障害物がある際、壊さずに
  * 「段差のジャンプ乗り越え」「サイドステップによる回り込み」「後退して別ルート再計算」を実行
@@ -699,6 +897,17 @@ function createBot(personaKey, index) {
     }
   });
 
+  // 敵対モブからの被ダメージ時、直ちに最強武器で反撃
+  bot.on('entityHurt', (entity) => {
+    if (entity === bot.entity) {
+      const hostile = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 12);
+      if (hostile && !bot.isSleeping) {
+        console.log(`⚔️ [${botName}] ダメージを受けました！直ちに反撃を開始: ${hostile.name}`);
+        engageHostileMob(bot, hostile);
+      }
+    }
+  });
+
   // チャット処理の共通ロジック (chatイベント & messagestrイベント両対応)
   let lastHandledChatMsg = '';
   let lastHandledChatTime = 0;
@@ -940,106 +1149,194 @@ async function autoEquipAll(bot, mode = 'combat') {
 }
 
 /**
- * 基本サバイバルクラフト (原木 -> 木材 -> 棒 -> 作業台 -> 木の剣/ツルハシ)
+ * 作業台を活用したツールのクラフト＆上位グレードへのアップグレード
+ * (ダイヤモンド > 鉄 > 石 > 木) の素材所持状況に応じて、剣・ツルハシ・斧・シャベルをクラフト＆更新
  */
-async function craftSurvivalKit(bot) {
+async function craftAndUpgradeTools(bot) {
   if (!bot.inventory) return;
   const mcData = require('minecraft-data')(bot.version);
+  const botName = bot.username;
   bot.customState.isBusy = true;
+
+  try {
+    const items = bot.inventory.items();
+
+    // 1. 原木があれば木材にクラフト
+    const logs = items.filter(i => i.name.includes('_log') || i.name.includes('_wood'));
+    for (const log of logs) {
+      const plankName = log.name.replace('_log', '_planks').replace('_wood', '_planks');
+      const plankItem = mcData.itemsByName[plankName] || mcData.itemsByName.oak_planks;
+      if (plankItem) {
+        const recipes = bot.recipesFor(plankItem.id, null, 1, null);
+        if (recipes.length > 0) {
+          try {
+            await bot.craft(recipes[0], Math.min(log.count, 4), null);
+          } catch (_) {}
+        }
+      }
+    }
+
+    // 2. 棒 (Stick) の確保 (4本未満ならクラフト)
+    const sticks = bot.inventory.items().find(i => i.name === 'stick');
+    const stickCount = sticks ? sticks.count : 0;
+    if (stickCount < 4) {
+      const stickItem = mcData.itemsByName.stick;
+      if (stickItem) {
+        const stickRecipes = bot.recipesFor(stickItem.id, null, 1, null);
+        if (stickRecipes.length > 0) {
+          try {
+            await bot.craft(stickRecipes[0], 1, null);
+          } catch (_) {}
+        }
+      }
+    }
+
+    // 3. 作業台 (crafting_table) の確保 (周囲16m探索 -> 手持ち設置 -> 新規クラフト設置)
+    let tableBlock = bot.findBlock({
+      matching: mcData.blocksByName.crafting_table.id,
+      maxDistance: 16
+    });
+
+    if (!tableBlock) {
+      let tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
+      if (!tableItem) {
+        const cTable = mcData.itemsByName.crafting_table;
+        if (cTable) {
+          const tableRecipes = bot.recipesFor(cTable.id, null, 1, null);
+          if (tableRecipes.length > 0) {
+            try {
+              await bot.craft(tableRecipes[0], 1, null);
+              tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
+            } catch (_) {}
+          }
+        }
+      }
+
+      if (tableItem) {
+        const ground = bot.blockAt(bot.entity.position.offset(1, -1, 0)) || bot.blockAt(bot.entity.position.offset(0, -1, 1));
+        if (ground && ground.name !== 'air') {
+          try {
+            await bot.equip(tableItem, 'hand');
+            await bot.placeBlock(ground, { x: 0, y: 1, z: 0 });
+            tableBlock = bot.findBlock({
+              matching: mcData.blocksByName.crafting_table.id,
+              maxDistance: 5
+            });
+          } catch (_) {}
+        }
+      }
+    }
+
+    if (tableBlock) {
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 2.0));
+        await new Promise(r => setTimeout(r, 800));
+      } catch (_) {}
+
+      // 4. ツールの作成＆アップグレード
+      // 素材Tier優先順: diamond > iron > stone > wooden
+      const tiers = [
+        { name: 'diamond', mat: 'diamond' },
+        { name: 'iron', mat: 'iron_ingot' },
+        { name: 'stone', mat: 'cobblestone' },
+        { name: 'wooden', mat: 'planks' }
+      ];
+      const toolTypes = ['sword', 'pickaxe', 'axe', 'shovel'];
+      const currentInv = bot.inventory.items();
+
+      for (const tType of toolTypes) {
+        // 現在所持しているツールの最高Tierを調べる (0=diamond, 1=iron, 2=stone, 3=wooden, 99=未所持)
+        let currentBestTierIdx = 99;
+        for (let i = 0; i < tiers.length; i++) {
+          const expectedName = `${tiers[i].name}_${tType}`;
+          if (currentInv.some(it => it.name === expectedName)) {
+            currentBestTierIdx = i;
+            break;
+          }
+        }
+
+        // 上位Tierのツール作成を試行
+        for (let targetTierIdx = 0; targetTierIdx < tiers.length; targetTierIdx++) {
+          if (targetTierIdx >= currentBestTierIdx) continue; // すでに同等以上を所持
+
+          const tier = tiers[targetTierIdx];
+          const toolItemName = `${tier.name}_${tType}`;
+          const targetItem = mcData.itemsByName[toolItemName];
+          if (!targetItem) continue;
+
+          const recipes = bot.recipesFor(targetItem.id, null, 1, tableBlock);
+          if (recipes.length > 0) {
+            console.log(`⚒️ [${botName}] 作業台で上位ツール「${toolItemName}」をクラフト（アップグレード）中...`);
+            try {
+              await bot.craft(recipes[0], 1, tableBlock);
+              recordDiary(botName, 'ツールアップグレード', `作業台を活用して「${toolItemName}」を新規クラフト・アップグレードしました！`, bot.entity.position);
+              break; // この種類のアップグレード完了
+            } catch (craftErr) {
+              console.warn(`[${botName}] ${toolItemName} クラフト注意:`, craftErr.message);
+            }
+          }
+        }
+      }
+
+      // 5. ツールの合成・修復 (Repair)
+      await repairDamagedTools(bot, tableBlock);
+    }
+
+    // クラフト・アップグレード後に最適な武器・ツールを自動装備
+    await autoEquipAll(bot, 'combat');
+  } catch (err) {
+    console.warn(`[${botName}] クラフト/アップグレード処理一部スキップ:`, err.message);
+  } finally {
+    if (bot.clearBotBusy) bot.clearBotBusy();
+  }
+}
+
+/**
+ * 耐久度が減少したツールの合成・修復
+ * 同種の摩耗ツール2本を作業台またはインベントリで合成して耐久度を回復
+ */
+async function repairDamagedTools(bot, tableBlock = null) {
+  if (!bot.inventory) return;
   const botName = bot.username;
 
   try {
     const items = bot.inventory.items();
-    const logs = items.filter(i => i.name.includes('_log') || i.name.includes('_wood'));
+    const tools = items.filter(i =>
+      i.name.includes('_sword') || i.name.includes('_pickaxe') || i.name.includes('_axe') || i.name.includes('_shovel')
+    );
 
-    if (logs.length > 0) {
-      const log = logs[0];
-      // 原木から木材をクラフト
-      const plankName = log.name.replace('_log', '_planks').replace('_wood', '_planks');
-      const plankItem = mcData.itemsByName[plankName] || mcData.itemsByName.oak_planks;
-
-      if (plankItem) {
-        const recipes = bot.recipesFor(plankItem.id, null, 1, null);
-        if (recipes.length > 0) {
-          console.log(`[${botName}] 木材(${plankName})をクラフト中...`);
-          await bot.craft(recipes[0], 1, null);
-        }
-      }
-
-      // 木材から棒をクラフト
-      const sticks = bot.inventory.items().find(i => i.name === 'stick');
-      if (!sticks || sticks.count < 4) {
-        const stickItem = mcData.itemsByName.stick;
-        const stickRecipes = bot.recipesFor(stickItem.id, null, 1, null);
-        if (stickRecipes.length > 0) {
-          console.log(`[${botName}] 棒(stick)をクラフト中...`);
-          await bot.craft(stickRecipes[0], 1, null);
-        }
-      }
-
-      // 作業台をクラフト
-      const hasTable = bot.inventory.items().some(i => i.name === 'crafting_table');
-      if (!hasTable) {
-        const tableItem = mcData.itemsByName.crafting_table;
-        const tableRecipes = bot.recipesFor(tableItem.id, null, 1, null);
-        if (tableRecipes.length > 0) {
-          console.log(`[${botName}] 作業台(crafting_table)をクラフト中...`);
-          await bot.craft(tableRecipes[0], 1, null);
-        }
-      }
-
-      // 1. 周囲16ブロック以内の既存の作業台を最優先で探索して活用
-      let tableBlock = bot.findBlock({
-        matching: mcData.blocksByName.crafting_table.id,
-        maxDistance: 16
-      });
-
-      if (tableBlock) {
-        console.log(`[${botName}] 周囲の既存作業台を発見！移動して使用します: X:${tableBlock.position.x}, Y:${tableBlock.position.y}, Z:${tableBlock.position.z}`);
-        bot.pathfinder.setGoal(new goals.GoalNear(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 2));
-        await new Promise(r => setTimeout(r, 1200));
-      } else if (tableItemInInv) {
-        // 既存のものがなければ足元付近の設置可能な面を探して設置
-        const groundBlock = bot.blockAt(bot.entity.position.offset(1, -1, 0)) || bot.blockAt(bot.entity.position.offset(0, -1, 1));
-        if (groundBlock && groundBlock.name !== 'air') {
-          try {
-            await bot.equip(tableItemInInv, 'hand');
-            await bot.placeBlock(groundBlock, { x: 0, y: 1, z: 0 });
-            tableBlock = bot.findBlock({
-              matching: mcData.blocksByName.crafting_table.id,
-              maxDistance: 4
-            });
-          } catch (e) {}
-        }
-      }
-
-      if (tableBlock) {
-        // 木の剣のクラフト (レシピ本展開)
-        const swordItem = mcData.itemsByName.wooden_sword;
-        const swordRecipes = bot.recipesFor(swordItem.id, null, 1, tableBlock);
-        if (swordRecipes.length > 0) {
-          console.log(`[${botName}] 木の剣(wooden_sword)をクラフト中...`);
-          await bot.craft(swordRecipes[0], 1, tableBlock);
-        }
-
-        // 木のツルハシのクラフト
-        const pickItem = mcData.itemsByName.wooden_pickaxe;
-        const pickRecipes = bot.recipesFor(pickItem.id, null, 1, tableBlock);
-        if (pickRecipes.length > 0) {
-          console.log(`[${botName}] 木のツルハシ(wooden_pickaxe)をクラフト中...`);
-          await bot.craft(pickRecipes[0], 1, tableBlock);
-        }
-      }
-
-      // クラフトした武器・ツールを即時装備！
-      await autoEquipAll(bot, 'combat');
-      recordDiary(botName, 'クラフト完了', `作業台を活用して木の剣とツルハシをクラフト・装備しました！`, bot.entity.position);
+    const toolGroups = {};
+    for (const tool of tools) {
+      if (!toolGroups[tool.name]) toolGroups[tool.name] = [];
+      toolGroups[tool.name].push(tool);
     }
-  } catch (err) {
-    console.warn(`[${botName}] クラフト処理一部スキップ:`, err.message);
-  } finally {
-    if (bot.clearBotBusy) bot.clearBotBusy();
+
+    for (const [name, list] of Object.entries(toolGroups)) {
+      if (list.length >= 2) {
+        // 耐久度が減っているものがあるかチェック (durabilityUsed > 0)
+        const damaged = list.filter(t => t.durabilityUsed && t.durabilityUsed > 0);
+        if (damaged.length > 0) {
+          console.log(`🔧 [${botName}] 損傷した「${name}」を検知。作業台で合成修復を試みます...`);
+          const sampleItem = list[0];
+          const recipes = bot.recipesFor(sampleItem.id, null, 1, tableBlock || null);
+          if (recipes.length > 0) {
+            try {
+              await bot.craft(recipes[0], 1, tableBlock || null);
+              console.log(`✨ [${botName}] 「${name}」の合成修復が完了しました！`);
+              recordDiary(botName, 'ツール修復', `損傷した「${name}」を作業台で合成し、耐久度を修復しました。`, bot.entity.position);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn(`[${botName}] ツール修復スキップ:`, e.message);
   }
+}
+
+// 既存コードとの互換性エイリアス
+async function craftSurvivalKit(bot) {
+  return craftAndUpgradeTools(bot);
 }
 
 /**
@@ -1297,19 +1594,20 @@ async function depositAllItemsToChest(bot, basePos) {
 }
 
 /**
- * 拠点内のベッドを探して就寝可能時刻に就寝
+ * 拠点内のベッドを探して就寝可能時刻に確実に就寝する
+ * （Botごとのベッド専有・夕暮れ待機・モンスター迎撃・寝付くまでの粘り強いリトライ）
  */
 async function goToBedAndSleep(bot, basePos, personaKey) {
   if (!bot.entity) return false;
   const botName = bot.username;
 
-  console.log(`🛏️ [${botName}] ベッドを探索中...`);
+  console.log(`🛏️ [${botName}] 拠点内のベッドを探索中...`);
 
   // 周囲のベッドを検索
   const bedBlockPositions = bot.findBlocks({
     matching: block => block && block.name && block.name.endsWith('_bed'),
-    maxDistance: 16,
-    count: 8
+    maxDistance: 24,
+    count: 12
   });
 
   if (!bedBlockPositions || bedBlockPositions.length === 0) {
@@ -1319,17 +1617,26 @@ async function goToBedAndSleep(bot, basePos, personaKey) {
     return false;
   }
 
-  // 他のBotがすでに就寝中または接近中のベッドを避けて選択
+  // 4体のBot（Gemini, ChatGPT, Claude, Grok）がお互いに重複しないよう専有ベッドを決定
+  const botKeys = ['Gemini', 'ChatGPT', 'Claude', 'Grok'];
+  const myIndex = botKeys.indexOf(personaKey);
   let chosenBedPos = null;
-  for (const bPos of bedBlockPositions) {
-    const isOccupied = Object.values(activeBots).some(otherBot => {
-      if (otherBot === bot || !otherBot.entity) return false;
-      return (otherBot.isSleeping || otherBot.customState?.targetBedPos?.equals?.(bPos)) &&
-        otherBot.entity.position.distanceTo(bPos) < 2.0;
-    });
-    if (!isOccupied) {
-      chosenBedPos = bPos;
-      break;
+
+  // 1. 各Botの固定インデックスに応じたベッドを最優先
+  if (myIndex >= 0 && myIndex < bedBlockPositions.length) {
+    chosenBedPos = bedBlockPositions[myIndex];
+  } else {
+    // 他のBotが使用・予約していないベッドを探索
+    for (const bPos of bedBlockPositions) {
+      const isOccupied = Object.values(activeBots).some(otherBot => {
+        if (otherBot === bot || !otherBot.entity) return false;
+        return (otherBot.isSleeping || otherBot.customState?.targetBedPos?.equals?.(bPos)) &&
+          otherBot.entity.position.distanceTo(bPos) < 2.0;
+      });
+      if (!isOccupied) {
+        chosenBedPos = bPos;
+        break;
+      }
     }
   }
   if (!chosenBedPos) chosenBedPos = bedBlockPositions[0];
@@ -1337,10 +1644,10 @@ async function goToBedAndSleep(bot, basePos, personaKey) {
 
   const bedBlock = bot.blockAt(chosenBedPos);
 
-  // ベッドに接近
+  // ベッドの枕元に接近
   try {
     bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.4));
-    for (let i = 0; i < 20; i++) {
+    for (let i = 0; i < 25; i++) {
       if (!bot.entity) break;
       if (bot.entity.position.distanceTo(chosenBedPos) <= 1.8) break;
       await new Promise(r => setTimeout(r, 200));
@@ -1350,32 +1657,42 @@ async function goToBedAndSleep(bot, basePos, personaKey) {
   } catch (_) {}
 
   // 就寝可能時刻（12542 ticks）までベッド横で待機
+  console.log(`⏳ [${botName}] 就寝可能時刻（夕暮れから夜: 12542 ticks）をベッド横で待機中...`);
   const startWait = Date.now();
   while (bot.time && (bot.time.timeOfDay < 12542 || bot.time.timeOfDay > 23000) && !bot.isRaining) {
-    if (Date.now() - startWait > 60000) break; // 最大1分待機
+    if (Date.now() - startWait > 65000) break; // 最大65秒待機
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // 就寝を試みる
-  for (let attempt = 0; attempt < 5; attempt++) {
+  // 必ず寝付くまで粘り強くリトライ（最大10回）
+  for (let attempt = 1; attempt <= 10; attempt++) {
     if (bot.isSleeping) break;
     try {
-      await bot.sleep(bedBlock);
-      console.log(`😴 [${botName}] ベッドに入り就寝しました。`);
-      recordDiary(botName, '就寝', '拠点のベッドで眠りにつきました。', bot.entity.position);
-      bot.chat('おやすみなさい…朝まで寝ます。');
-      break;
+      const currentBed = bot.blockAt(chosenBedPos);
+      if (currentBed) {
+        await bot.sleep(currentBed);
+        console.log(`😴 [${botName}] ベッドに入り就寝しました。（試行 ${attempt}回目）`);
+        recordDiary(botName, '就寝', '拠点のベッドで眠りにつきました。朝までぐっすり眠ります。', bot.entity.position);
+        bot.chat('おやすみなさい…朝まで寝ます。');
+        break;
+      }
     } catch (sleepErr) {
-      console.warn(`[${botName}] 就寝試行 (${attempt + 1}/5):`, sleepErr.message);
+      console.warn(`[${botName}] 就寝試行 (${attempt}/10):`, sleepErr.message);
+
+      // モンスターが近くにいて寝られない場合は直ちに討伐
       if (sleepErr.message.includes('monsters')) {
-        // 周囲のモンスターを迎撃
-        const mob = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(bot.entity.position) < 8);
-        if (mob && bot.pvp) {
-          bot.pvp.attack(mob);
-          await new Promise(r => setTimeout(r, 4000));
+        const mob = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 12);
+        if (mob) {
+          console.log(`⚔️ [${botName}] 就寝を妨げるモンスター「${mob.name}」を排除します！`);
+          await engageHostileMob(bot, mob);
+          // 排除後にベッドへ戻る
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.4));
+            await new Promise(r => setTimeout(r, 1500));
+          } catch (_) {}
         }
       } else {
-        await new Promise(r => setTimeout(r, 2000));
+        await new Promise(r => setTimeout(r, 1500));
       }
     }
   }
@@ -1385,52 +1702,56 @@ async function goToBedAndSleep(bot, basePos, personaKey) {
 
 /**
  * 日没ルーチン:
- * 1. 拠点(95, 63, 44)へ戻る
- * 2. 最寄りのチェストに全ての所持品を入れ込む
- * 3. ベッドで寝る
+ * 1. 拠点(95, 63, 44)へ帰還
+ * 2. 直線移動ではなく「ドア（出入り口）」を正しく判断して部屋へ入室
+ * 3. 最寄りのチェストに全ての所持品を預ける
+ * 4. ベッドで必ず就寝する
  */
 async function executeNightRoutine(bot, personaKey) {
   const persona = personas[personaKey] || { name: bot.username };
   const botName = persona.name;
   if (!bot.entity) return;
 
-  bot.setBotBusy('night_routine', 120000);
-  console.log(`🌇 [${botName}] 日没が近づきました。拠点(95, 63, 44)へ帰還を開始します。`);
+  bot.setBotBusy('night_routine', 150000);
+  console.log(`🌇 [${botName}] 夕暮れ・日没が近づきました。拠点(95, 63, 44)へ帰還を開始します。`);
 
   const sunsetQuotes = {
-    Gemini: '日が暮れてきましたね。安全のため、座標(95, 63, 44)の拠点に戻って荷物を整理し、休みましょう。',
-    ChatGPT: '日没が近づいています！拠点に帰還して、集めた物資をチェストに預けてベッドで寝る準備をしますね。',
-    Claude: '夕暮れです。モンスターの活動が活発になる前に拠点へ戻り、所持品をチェストへ納めて就寝しましょう。',
-    Grok: 'おっと、太陽が沈みそうだぜ！拠点に戻って戦利品をチェストにぶち込んで、ベッドでグッスリ眠るぜ！'
+    Gemini: '日が暮れてきましたね。安全のため、拠点のドアから入室して荷物を整理し、ベッドで休みましょう。',
+    ChatGPT: '日没が近づいています！出入り口のドアを通って拠点に入り、物資をチェストに預けてベッドで寝ますね。',
+    Claude: '夕暮れです。モンスターが出る前にドアから部屋に入り、所持品を納めて確実に就寝しましょう。',
+    Grok: 'おっと、日が沈むぜ！拠点のドアをしっかり通って中に入り、荷物を預けてベッドで爆睡するぜ！'
   };
-  bot.chat(sunsetQuotes[personaKey] || '日が沈む前に拠点へ戻り、荷物をチェストに預けて寝ます！');
-  recordDiary(botName, '日没・拠点帰還', '日没が近づいたため、指定座標(95, 63, 44)の拠点へ帰還を開始しました。', bot.entity.position);
+  bot.chat(sunsetQuotes[personaKey] || '日が沈む前に拠点のドアから入室し、荷物を預けてベッドで寝ます！');
+  recordDiary(botName, '日没・拠点帰還', '日没が近づいたため、拠点の出入り口ドアを通って帰還を開始しました。', bot.entity.position);
 
-  // 1. 拠点へ移動
+  // 1. 拠点周辺へ移動
   const baseTarget = findBaseLocation(bot);
   try {
-    bot.pathfinder.setGoal(new goals.GoalNear(baseTarget.x, baseTarget.y, baseTarget.z, 2.5));
+    bot.pathfinder.setGoal(new goals.GoalNear(baseTarget.x, baseTarget.y, baseTarget.z, 5.0));
     const arriveStart = Date.now();
-    while (bot.entity && bot.entity.position.distanceTo(baseTarget) > 3.5) {
+    while (bot.entity && bot.entity.position.distanceTo(baseTarget) > 6.0) {
       if (Date.now() - arriveStart > 40000) break;
       await new Promise(r => setTimeout(r, 500));
     }
   } catch (err) {
-    console.warn(`[${botName}] 拠点移動注意:`, err.message);
+    console.warn(`[${botName}] 拠点接近注意:`, err.message);
   }
 
-  // 2. 最寄りのチェストに全ての所持品を入れ込み
+  // 2. 直線で壁に突っ込まず、ドア（出入り口）を経由して部屋に入室
+  await navigateThroughDoor(bot, true);
+
+  // 3. 最寄りのチェストに全ての所持品を入れ込み
   await depositAllItemsToChest(bot, baseTarget);
 
-  // 3. ベッドで寝る
+  // 4. ベッドで必ず就寝
   await goToBedAndSleep(bot, baseTarget, personaKey);
 }
 
 /**
  * 朝のルーチン:
- * 朝が来たら、チェストの中身を取ることはせず、所持品が空っぽのまま探検する
+ * 朝が来たら起床し、部屋のドア（出入り口）を通って外に出てから探検へ出発
  */
-function executeMorningRoutine(bot, personaKey) {
+async function executeMorningRoutine(bot, personaKey) {
   const persona = personas[personaKey] || { name: bot.username };
   const botName = persona.name;
   if (!bot.entity) return;
@@ -1442,25 +1763,28 @@ function executeMorningRoutine(bot, personaKey) {
     } catch (_) {}
   }
 
-  console.log(`🌅 [${botName}] 朝が来ました！所持品は空っぽのまま探検に出発します。`);
+  console.log(`🌅 [${botName}] 朝が来ました！ドアを通って部屋から外に出て探検に出発します。`);
 
   const morningQuotes = {
-    Gemini: 'おはようございます！朝になりましたね。チェストの物は取らず、身軽な状態のまま探検を始めましょう！',
-    ChatGPT: 'おはようございます！夜が明けました。所持品は空っぽのまま、新たな探検に出発します！',
-    Claude: '気持ちの良い朝ですね。チェストの中身はそのままで、手ぶらで周囲の探検へ出かけましょう。',
-    Grok: 'よっしゃ朝だぜ！チェストのアイテムには手を付けず、身一つで大冒険の始まりだ！'
+    Gemini: 'おはようございます！朝になりました。ドアを通って外に出て、身軽な状態のまま探検を始めましょう！',
+    ChatGPT: 'おはようございます！夜が明けました。出入り口のドアから外へ出て、新たな探検に出発します！',
+    Claude: '気持ちの良い朝ですね。部屋のドアから外へ出て、手ぶらで周囲の探検へ出かけましょう。',
+    Grok: 'よっしゃ朝だぜ！ドアを開けて外へ飛び出し、身一つで大冒険の始まりだぜ！'
   };
 
-  bot.chat(morningQuotes[personaKey] || '朝が来ました！チェストには触らず、所持品が空っぽのまま探検に出発します！');
-  recordDiary(botName, '朝の探検出発', '朝を迎えました。チェストのアイテムは取らず、所持品が空っぽのまま周辺の探検に出発しました。', bot.entity.position);
+  bot.chat(morningQuotes[personaKey] || '朝が来ました！ドアから外に出て、探検に出発します！');
+  recordDiary(botName, '朝の探検出発', '朝を迎えました。ドアを通って屋外へ退室し、周辺の探検に出発しました。', bot.entity.position);
 
   if (bot.clearBotBusy) bot.clearBotBusy();
   bot.customState.targetBedPos = null;
 
-  // 拠点から離れる方向（20〜35ブロック先）へ探検出発
+  // 部屋からドア（出入り口）を経由して安全に外へ出る
+  await navigateThroughDoor(bot, false);
+
+  // 外に出てから探検出発
   setTimeout(() => {
     exploreOutward(bot);
-  }, 1500);
+  }, 1200);
 }
 
 /**
@@ -1548,13 +1872,10 @@ function startCompanionLoop(bot) {
     try {
       const botPos = bot.entity.position;
 
-      // 1. 周囲の敵対モブを最優先で警戒・迎撃準備
-      const hostile = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(botPos) < 12);
+      // 1. 周囲の敵対モブを最優先で警戒・迎撃（斧や剣などのツールで撃退）
+      const hostile = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(botPos) < 12);
       if (hostile) {
-        autoEquipAll(bot, 'combat');
-        if (bot.pvp && !bot.pvp.target) {
-          bot.pvp.attack(hostile);
-        }
+        engageHostileMob(bot, hostile);
         return;
       }
 
@@ -1720,9 +2041,9 @@ function executeAction(bot, persona, thought, targetPlayer) {
           bot.collectBlock.collect(targetBlock, err => {
             if (bot.clearBotBusy) bot.clearBotBusy();
             if (!err) {
-              recordDiary(botName, '伐採完了', `原木「${targetBlock.name}」の伐採に成功しました。クラフトを試みます。`, bot.entity.position);
-              // 伐採できたら直ちにクラフトと装備を試みる
-              setTimeout(() => { craftSurvivalKit(bot); }, 800);
+              recordDiary(botName, '伐採完了', `原木「${targetBlock.name}」の伐採に成功しました。クラフト・アップグレードを試みます。`, bot.entity.position);
+              // 伐採できたら直ちにクラフトとアップグレードを試みる
+              setTimeout(() => { craftAndUpgradeTools(bot); }, 600);
             }
           });
         }
@@ -1735,7 +2056,7 @@ function executeAction(bot, persona, thought, targetPlayer) {
     case 'mine':
       autoEquipAll(bot, 'mine');
       const stoneBlocks = bot.findBlocks({
-        matching: block => block && block.name && (block.name.includes('stone') || block.name.includes('coal_ore') || block.name.includes('iron_ore')),
+        matching: block => block && block.name && (block.name.includes('stone') || block.name.includes('coal_ore') || block.name.includes('iron_ore') || block.name.includes('diamond_ore')),
         maxDistance: 16,
         count: 1
       });
@@ -1746,6 +2067,8 @@ function executeAction(bot, persona, thought, targetPlayer) {
           bot.collectBlock.collect(blk, () => {
             if (bot.clearBotBusy) bot.clearBotBusy();
             autoEquipAll(bot, 'combat');
+            // 石や鉱石を採掘後、ツールの上位アップグレードを試行
+            setTimeout(() => { craftAndUpgradeTools(bot); }, 600);
           });
         }
       } else {
@@ -1755,13 +2078,10 @@ function executeAction(bot, persona, thought, targetPlayer) {
       break;
 
     case 'attack':
-      autoEquipAll(bot, 'combat');
-      const hostile = bot.nearestEntity(e => e.type === 'mob' && e.kind === 'Hostile' && e.position.distanceTo(bot.entity.position) < 16);
-      if (hostile && bot.pvp) {
-        console.log(`[${botName}] 敵対モブと戦闘開始: ${hostile.name}`);
-        if (bot.setBotBusy) bot.setBotBusy('attack', 12000);
-        bot.pvp.attack(hostile);
-        recordDiary(botName, '戦闘', `武器を構えてモンスター「${hostile.name}」を迎撃中。`, bot.entity.position);
+      const hostileMob = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 16);
+      if (hostileMob) {
+        if (bot.setBotBusy) bot.setBotBusy('attack', 15000);
+        engageHostileMob(bot, hostileMob);
       }
       break;
 
