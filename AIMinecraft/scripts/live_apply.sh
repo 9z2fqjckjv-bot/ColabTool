@@ -32,15 +32,25 @@ else
     fi
 fi
 
-# 確実性保証: 最新コードを直接同期
+# サブディレクトリ AIMinecraft がある場合は中身を REPO_DIR 直下へ同期
+if [ -d "$REPO_DIR/AIMinecraft" ]; then
+    cp -rf "$REPO_DIR/AIMinecraft/"* "$REPO_DIR/"
+fi
+
+# 確実性保証: 最新コードを直接同期 (新旧両方のURLをフェイルセーフで試行)
 mkdir -p "$REPO_DIR/bot" "$REPO_DIR/recorder" "$REPO_DIR/scripts"
+BASE_URL="https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main"
+
 for bfile in index.js brain.js knowledge_base.js persona.js vision_capturer.js package.json; do
-    curl -sL -o "$REPO_DIR/bot/$bfile" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/bot/$bfile" || true
+    curl -sL -f -o "$REPO_DIR/bot/$bfile" "${BASE_URL}/AIMinecraft/bot/$bfile" 2>/dev/null || \
+    curl -sL -f -o "$REPO_DIR/bot/$bfile" "${BASE_URL}/bot/$bfile" 2>/dev/null || true
 done
 
 for rfile in record_viewer.sh multiview.html; do
-    curl -sL -o "$REPO_DIR/recorder/$rfile" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/recorder/$rfile" || true
+    curl -sL -f -o "$REPO_DIR/recorder/$rfile" "${BASE_URL}/AIMinecraft/recorder/$rfile" 2>/dev/null || \
+    curl -sL -f -o "$REPO_DIR/recorder/$rfile" "${BASE_URL}/recorder/$rfile" 2>/dev/null || true
 done
+
 chmod +x "$REPO_DIR/recorder/record_viewer.sh" "$REPO_DIR/scripts/"*.sh "$REPO_DIR/scripts/"*.py 2>/dev/null || true
 
 # 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) の配置
@@ -48,8 +58,11 @@ echo ">> [1/6] レーダー地図プラグインを配置中..."
 mkdir -p "$SERVER_DIR/plugins"
 if [ -f "$REPO_DIR/plugins/RadarMap.jar" ]; then
     cp -f "$REPO_DIR/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+elif [ -f "$REPO_DIR/AIMinecraft/plugins/RadarMap.jar" ]; then
+    cp -f "$REPO_DIR/AIMinecraft/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
 else
-    curl -sL -o "$SERVER_DIR/plugins/RadarMap.jar" "https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/plugins/RadarMap.jar" || true
+    curl -sL -f -o "$SERVER_DIR/plugins/RadarMap.jar" "${BASE_URL}/AIMinecraft/plugins/RadarMap.jar" 2>/dev/null || \
+    curl -sL -f -o "$SERVER_DIR/plugins/RadarMap.jar" "${BASE_URL}/plugins/RadarMap.jar" 2>/dev/null || true
 fi
 echo "✅ RadarMap.jar の配置完了！"
 

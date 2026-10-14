@@ -676,15 +676,17 @@ function createBot(personaKey, index) {
   // インベントリ更新イベント (bot.inventory はスポーン後に生成されるため spawn イベントで監視登録)
   let equipDebounce = null;
   bot.on('spawn', () => {
-    if (bot.inventory && !bot.inventory._hasAutoEquipListener) {
-      bot.inventory._hasAutoEquipListener = true;
-      bot.inventory.on('updateSlot', (slot, oldItem, newItem) => {
-        if (equipDebounce) clearTimeout(equipDebounce);
-        equipDebounce = setTimeout(() => {
-          autoEquipAll(bot, 'idle');
-        }, 300);
-      });
-    }
+    try {
+      if (bot.inventory && typeof bot.inventory.on === 'function' && !bot.inventory._hasAutoEquipListener) {
+        bot.inventory._hasAutoEquipListener = true;
+        bot.inventory.on('updateSlot', (slot, oldItem, newItem) => {
+          if (equipDebounce) clearTimeout(equipDebounce);
+          equipDebounce = setTimeout(() => {
+            try { autoEquipAll(bot, 'idle'); } catch (_) {}
+          }, 300);
+        });
+      }
+    } catch (_) {}
   });
 
   // アイテム回収時にも即座に自動装備をトリガー

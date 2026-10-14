@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Minecraft AI Multi-POV Monitor (4-Split POV Recording)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #090d16;
+      color: #f0f6fc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      width: 1920px;
+      height: 1080px;
+      overflow: hidden;
+      user-select: none;
+    }
+    
+    /* ヘッダーバー */
+    .top-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1920px;
+      height: 40px;
+      background: rgba(13, 17, 23, 0.92);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      z-index: 100;
+    }
+    .top-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 15px;
+      letter-spacing: 0.5px;
+    }
+    .rec-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 59, 48, 0.2);
+      border: 1px solid rgba(255, 59, 48, 0.6);
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #ff453a;
+    }
+    .rec-dot {
+      width: 8px;
+      height: 8px;
+      background: #ff3b30;
+      border-radius: 50%;
+      animation: blink 1.2s infinite ease-in-out;
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.25; transform: scale(0.85); }
+    }
+    .top-right {
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      font-size: 13px;
+      color: #8b949e;
+      font-family: monospace;
+    }
+
+    /* 4分割グリッド */
+    .grid {
+      display: grid;
+      grid-template-columns: 960px 960px;
+      grid-template-rows: 520px 520px;
+      width: 1920px;
+      height: 1040px;
+      margin-top: 40px;
+      gap: 4px;
+      background: #05080f;
+      padding: 4px;
+    }
+    .cell {
+      position: relative;
+      background: #0d1117;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid #21262d;
+      box-shadow: inset 0 0 20px rgba(0,0,0,0.8);
+    }
+    .cell iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #000;
+      display: none;
+    }
+    .cell iframe.loaded {
+      display: block;
+    }
+
+    /* 待機プレースホルダー */
+    .placeholder {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at center, #161b22 0%, #0d1117 100%);
+      color: #c9d1d9;
+      gap: 12px;
+      z-index: 5;
+    }
+    .placeholder.hidden {
+      display: none;
+    }
+    .spinner {
+      width: 38px;
+      height: 38px;
+      border: 3px solid rgba(255, 255, 255, 0.1);
+      border-top-color: #58a6ff;
+      border-radius: 50%;
+      animation: spin 1s infinite linear;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .ph-title {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+    }
+    .ph-sub {
+      font-size: 13px;
+      color: #8b949e;
+      font-family: monospace;
+    }
+
+    /* オーバーレイバッジ */
+    .overlay {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      background: rgba(13, 17, 23, 0.88);
+      backdrop-filter: blur(10px);
+      padding: 6px 14px;
+      border-radius: 18px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      z-index: 20;
+      font-weight: 700;
+      font-size: 13px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.6);
+    }
+    .badge-status {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ffaa00;
+    }
+    .badge-status.online {
+      background: #2ea043;
+      box-shadow: 0 0 8px #2ea043;
+    }
+
+    .name-gemini  { color: #58a6ff; }
+    .name-chatgpt { color: #3fb950; }
+    .name-claude  { color: #d2a8ff; }
+    .name-grok    { color: #ffa657; }
+
+    /* 各視点のウォーターマーク */
+    .pov-tag {
+      position: absolute;
+      bottom: 12px;
+      right: 14px;
+      background: rgba(0, 0, 0, 0.7);
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: monospace;
+      color: rgba(255, 255, 255, 0.6);
+      z-index: 20;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- トップステータスバー -->
+  <div class="top-bar">
+    <div class="top-left">
+      <div class="rec-indicator">
+        <span class="rec-dot"></span>
+        <span>REC</span>
+      </div>
+      <span>MINECRAFT AI 4-POV AUTO-RECORDER</span>
+    </div>
+    <div class="top-right">
+      <span>RES: 1920x1080@24FPS</span>
+      <span id="uptime">REC TIME: 00:00:00</span>
+      <span>COLAB AUTONOMOUS CLUSTER</span>
+    </div>
+  </div>
+
+  <!-- 4分割グリッド -->
+  <div class="grid">
+    <!-- 1. Gemini POV (Port 3001) -->
+    <div class="cell" id="cell-3001">
+      <div class="overlay">
+        <span class="badge-status" id="status-3001"></span>
+        <span class="name-gemini">Gemini POV (First-Person)</span>
+      </div>
+      <div class="placeholder" id="ph-3001">
+        <div class="spinner"></div>
+        <div class="ph-title name-gemini">Gemini 一人称視点待機中</div>
+        <div class="ph-sub">http://127.0.0.1:3001</div>
+      </div>
+      <iframe id="iframe-3001" data-port="3001"></iframe>
+      <div class="pov-tag">CAM 01 | POV-FIRSTPERSON</div>
+    </div>
+
+    <!-- 2. ChatGPT POV (Port 3002) -->
+    <div class="cell" id="cell-3002">
+      <div class="overlay">
+        <span class="badge-status" id="status-3002"></span>
+        <span class="name-chatgpt">ChatGPT POV (First-Person)</span>
+      </div>
+      <div class="placeholder" id="ph-3002">
+        <div class="spinner"></div>
+        <div class="ph-title name-chatgpt">ChatGPT 一人称視点待機中</div>
+        <div class="ph-sub">http://127.0.0.1:3002</div>
+      </div>
+      <iframe id="iframe-3002" data-port="3002"></iframe>
+      <div class="pov-tag">CAM 02 | POV-FIRSTPERSON</div>
+    </div>
+
+    <!-- 3. Claude POV (Port 3003) -->
+    <div class="cell" id="cell-3003">
+      <div class="overlay">
+        <span class="badge-status" id="status-3003"></span>
+        <span class="name-claude">Claude POV (First-Person)</span>
+      </div>
+      <div class="placeholder" id="ph-3003">
+        <div class="spinner"></div>
+        <div class="ph-title name-claude">Claude 一人称視点待機中</div>
+        <div class="ph-sub">http://127.0.0.1:3003</div>
+      </div>
+      <iframe id="iframe-3003" data-port="3003"></iframe>
+      <div class="pov-tag">CAM 03 | POV-FIRSTPERSON</div>
+    </div>
+
+    <!-- 4. Grok POV (Port 3004) -->
+    <div class="cell" id="cell-3004">
+      <div class="overlay">
+        <span class="badge-status" id="status-3004"></span>
+        <span class="name-grok">Grok POV (First-Person)</span>
+      </div>
+      <div class="placeholder" id="ph-3004">
+        <div class="spinner"></div>
+        <div class="ph-title name-grok">Grok 一人称視点待機中</div>
+        <div class="ph-sub">http://127.0.0.1:3004</div>
+      </div>
+      <iframe id="iframe-3004" data-port="3004"></iframe>
+      <div class="pov-tag">CAM 04 | POV-FIRSTPERSON</div>
+    </div>
+  </div>
+
+  <script>
+    // 録画経過時間カウンター
+    const startTime = Date.now();
+    setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startTime) / 1000);
+      const h = String(Math.floor(elapsed / 3600)).padStart(2, '0');
+      const m = String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0');
+      const s = String(elapsed % 60).padStart(2, '0');
+      document.getElementById('uptime').innerText = `REC TIME: ${h}:${m}:${s}`;
+    }, 1000);
+
+    // 各ストリームのポート監視と自動リトライ
+    const ports = [3001, 3002, 3003, 3004];
+    const streamState = {};
+
+    ports.forEach(port => {
+      streamState[port] = { online: false, connecting: false };
+      checkAndLoadStream(port);
+      // 4秒ごとにヘルスチェック
+      setInterval(() => checkAndLoadStream(port), 4000);
+    });
+
+    async function checkAndLoadStream(port) {
+      const iframe = document.getElementById(`iframe-${port}`);
+      const placeholder = document.getElementById(`ph-${port}`);
+      const statusBadge = document.getElementById(`status-${port}`);
+
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 2000);
+        
+        await fetch(`http://127.0.0.1:${port}/`, {
+          method: 'GET',
+          mode: 'no-cors',
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        // 接続成功
+        if (!streamState[port].online) {
+          streamState[port].online = true;
+          statusBadge.classList.add('online');
+          iframe.src = `http://127.0.0.1:${port}/`;
+          iframe.onload = () => {
+            placeholder.classList.add('hidden');
+            iframe.classList.add('loaded');
+          };
+        }
+      } catch (err) {
+        // 未接続または切断
+        if (streamState[port].online) {
+          streamState[port].online = false;
+          statusBadge.classList.remove('online');
+          placeholder.classList.remove('hidden');
+          iframe.classList.remove('loaded');
+        }
+      }
+    }
+  </script>
+</body>
+</html>
