@@ -25,11 +25,14 @@ apt-get install -y -qq \
     pulseaudio pulseaudio-utils alsa-utils pavucontrol \
     libgl1-mesa-glx mesa-utils libvulkan1 vulkan-tools \
     ffmpeg jq curl wget git zstd htop \
-    python3-dbus python3-gi libdbus-1-3 libdbus-1-dev libglib2.0-dev python3-dev \
+    python3-dbus python3-gi libdbus-1-3 libdbus-1-dev libglib2.0-dev python3-dev pkg-config \
     openjdk-21-jdk-headless > /dev/null 2>&1
 
 # Python D-Bus バインディングの確実なコンパイル・導入 (Colab Python用)
-python3 -m pip install --no-cache-dir dbus-python > /dev/null 2>&1 || true
+python3 -m pip install --ignore-installed --no-cache-dir dbus-python > /dev/null 2>&1 || true
+if which python3.10 >/dev/null 2>&1 && python3.10 -c "import dbus" >/dev/null 2>&1; then
+    sed -i '1s|.*|#!/usr/bin/python3.10|' /opt/google/chrome-remote-desktop/chrome-remote-desktop 2>/dev/null || true
+fi
 
 # 3. Google Chrome & Chrome Remote Desktop のインストール
 echo ">> [3/8] Google Chrome & Chrome Remote Desktop の確認 & インストール..."

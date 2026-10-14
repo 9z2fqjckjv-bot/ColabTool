@@ -64,8 +64,11 @@ if [ -n "$CRD_CODE" ]; then
     echo "Chrome Remote Desktop を構成中..."
     if ! python3 -c "import dbus" > /dev/null 2>&1; then
         echo "python3-dbus パッケージをインストール & ビルド中..."
-        apt-get install -y -qq python3-dbus python3-gi libdbus-1-3 libdbus-1-dev libglib2.0-dev python3-dev > /dev/null 2>&1 || true
-        python3 -m pip install --no-cache-dir dbus-python > /dev/null 2>&1 || true
+        apt-get install -y -qq python3-dbus python3-gi libdbus-1-3 libdbus-1-dev libglib2.0-dev python3-dev pkg-config > /dev/null 2>&1 || true
+        python3 -m pip install --ignore-installed --no-cache-dir dbus-python > /dev/null 2>&1 || true
+        if which python3.10 >/dev/null 2>&1 && python3.10 -c "import dbus" >/dev/null 2>&1; then
+            sed -i '1s|.*|#!/usr/bin/python3.10|' /opt/google/chrome-remote-desktop/chrome-remote-desktop 2>/dev/null || true
+        fi
     fi
 
     # colabuserの存在確認・設定 (CRDはroot実行不可のため)
