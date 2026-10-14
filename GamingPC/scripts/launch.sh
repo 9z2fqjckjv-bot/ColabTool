@@ -1,18 +1,19 @@
 #!/bin/bash
 # ==============================================================================
 # launch.sh - Ultra-Fast & Cached One-Click Launch for Colab Gaming PC
+# (Includes Japanese UI, MacBook 16:10, Ultra-Sync Audio, and MacBook Hardware Bridge)
 # ==============================================================================
 
 export DEBIAN_FRONTEND=noninteractive
 SCREEN_RES="${1:-1680x1050}" # MacBook 16:10 デフォルト
 
 echo "=================================================="
-echo "  🎮 Gaming PC 仮想環境（日本語・音同期・MacBook最適化）"
+echo "  🎮 Gaming PC 仮想環境（日本語・音同期・MacBookハードウェア直結）"
 echo "  画面解像度: ${SCREEN_RES}"
 echo "=================================================="
 
 # 1. タイムゾーン (Asia/Tokyo) & 日本語ロケール
-echo ">> [1/5] 日本標準時 (Asia/Tokyo) & 日本語フォント設定..."
+echo ">> [1/6] 日本標準時 (Asia/Tokyo) & 日本語フォント設定..."
 ln -sf /usr/share/zoneinfo/Asia/Tokyo /etc/localtime 2>/dev/null || true
 echo "Asia/Tokyo" > /etc/timezone 2>/dev/null || true
 
@@ -42,7 +43,7 @@ export LC_ALL=ja_JP.UTF-8
 export TZ=Asia/Tokyo
 
 # 2. 一般ユーザー (colabuser) の作成 & 権限付与
-echo ">> [2/5] 実行ユーザー権限 & オーディオの初期化..."
+echo ">> [2/6] 実行ユーザー権限 & オーディオの初期化..."
 if ! id -u colabuser >/dev/null 2>&1; then
     useradd -m -s /bin/bash -G sudo,video,audio colabuser 2>/dev/null || true
     echo "colabuser:123456" | chpasswd 2>/dev/null || true
@@ -51,13 +52,20 @@ fi
 usermod -aG video,audio,render colabuser 2>/dev/null || true
 xhost +local: > /dev/null 2>&1 || xhost + > /dev/null 2>&1 || true
 
-# PulseAudio 仮想オーディオ
+# PulseAudio 仮想スピーカー & 仮想マイク (MacBook パススルー用) の初期化
 pulseaudio -D --exit-idle-time=-1 2>/dev/null || true
 pactl load-module module-null-sink sink_name=VirtualSink sink_properties=device.description=VirtualSink 2>/dev/null || true
 pactl set-default-sink VirtualSink 2>/dev/null || true
 
+# MacBook マイク入力用 FIFO パイプ & 仮想マイクソース
+FIFO_MIC="/tmp/virtual_mic.fifo"
+rm -f "$FIFO_MIC"
+mkfifo "$FIFO_MIC" 2>/dev/null || true
+pactl load-module module-pipe-source source_name=VirtualMic file="$FIFO_MIC" format=s16le rate=44100 channels=1 2>/dev/null || true
+pactl set-default-source VirtualMic 2>/dev/null || true
+
 # 3. ブラウザ & ゲームソフトの導入（未導入時のみダウンロード）
-echo ">> [3/5] Google Chrome, Steam, Prism Launcher (Minecraft), Discord の確認..."
+echo ">> [3/6] Google Chrome, Steam, Prism Launcher (Minecraft), Discord の確認..."
 
 # Google Chrome
 if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
@@ -122,7 +130,7 @@ chmod +x /usr/local/bin/prismlauncher 2>/dev/null || true
 which obs > /dev/null 2>&1 || apt-get install -y -qq obs-studio 2>/dev/null || true
 
 # 4. 日本語デスクトップショートカットの配置
-echo ">> [4/5] デスクトップショートカットの整備..."
+echo ">> [4/6] デスクトップショートカットの整備..."
 DESKTOP_DIR="/root/Desktop"
 mkdir -p "$DESKTOP_DIR" /content/chrome_profiles/profile1 /content/chrome_profiles/profile2 /content/chrome_profiles/profile3
 
@@ -230,14 +238,28 @@ for f in /home/colabuser/Desktop/*.desktop; do
 done
 chown -R colabuser:colabuser /home/colabuser 2>/dev/null || true
 
-# 5. Xvfb 画面 & 超低遅延音同期エンジンの起動
-echo ">> [5/5] Xvfb 仮想ディスプレイ (${SCREEN_RES}) & Web Audio 音同期エンジンの起動..."
+# 5. Xvfb 画面 & MacBook キーボード/トラックパッド ハードウェア適合
+echo ">> [5/6] Xvfb 仮想ディスプレイ (${SCREEN_RES}) & Apple キーボード適合..."
 export DISPLAY=:1
 
 if ! pgrep -f "Xvfb :1" > /dev/null 2>&1; then
     nohup Xvfb :1 -screen 0 "${SCREEN_RES}x24" +extension GLX +extension RENDER -noreset > /content/xvfb.log 2>&1 &
     sleep 2
 fi
+
+# Apple Keyboard / Trackpad ハードウェアマッピング
+setxkbmap -display :1 -model macbook79 -layout jp 2>/dev/null || setxkbmap -display :1 -layout jp 2>/dev/null || true
+cat << 'EOF' > /root/.Xmodmap
+clear mod4
+clear mod1
+keycode 133 = Super_L
+keycode 134 = Super_R
+keycode 64 = Alt_L Meta_L
+keycode 108 = Alt_R Meta_R
+add mod1 = Alt_L Alt_R
+add mod4 = Super_L Super_R
+EOF
+xmodmap /root/.Xmodmap 2>/dev/null || true
 
 mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml /home/colabuser/.config/xfce4/xfconf/xfce-perchannel-xml
 cp -r /etc/xdg/xfce4/panel/default.xml /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml 2>/dev/null || true
@@ -248,8 +270,11 @@ if ! pgrep -f "xfce4-session" > /dev/null 2>&1; then
     sleep 2
 fi
 
-# 超低遅延 PCM 音声配信デーモン (ポート 8000)
-fuser -k 8000/tcp 2>/dev/null || true
+# 6. 超低遅延音同期 (8000) & MacBook マイクブリッジ (8001) の起動
+echo ">> [6/6] 超低遅延音同期 & MacBook マイクブリッジの起動..."
+fuser -k 8000/tcp 8001/tcp 2>/dev/null || true
+
+# 音声出力サーバー (VirtualSink -> ブラウザスピーカー)
 cat << 'EOF' > /content/audio_stream.py
 import subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -286,6 +311,42 @@ httpd.serve_forever()
 EOF
 nohup python3 /content/audio_stream.py > /dev/null 2>&1 &
 
+# マイク入力ブリッジ (ブラウザマイク -> Linux VirtualMic)
+cat << 'EOF' > /content/macbook_mic_bridge.py
+import os
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+FIFO_PATH = "/tmp/virtual_mic.fifo"
+
+class MicBridgeHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if self.path == "/mic_input":
+            length = int(self.headers.get('Content-Length', 0))
+            data = self.rfile.read(length)
+            try:
+                with open(FIFO_PATH, "wb", buffering=0) as f:
+                    f.write(data)
+            except Exception:
+                pass
+            self.send_response(200)
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+
+httpd = HTTPServer(('0.0.0.0', 8001), MicBridgeHandler)
+httpd.serve_forever()
+EOF
+nohup python3 /content/macbook_mic_bridge.py > /dev/null 2>&1 &
+
 # x11vnc & websockify 起動
 fuser -k 5901/tcp 6080/tcp 2>/dev/null || true
 sleep 1
@@ -295,7 +356,7 @@ NOVNC_DIR="/usr/share/novnc"
 [ -d "$NOVNC_DIR" ] || NOVNC_DIR="/usr/local/share/novnc"
 [ -f "$NOVNC_DIR/index.html" ] && [ ! -f "$NOVNC_DIR/vnc.html" ] && ln -sf "$NOVNC_DIR/index.html" "$NOVNC_DIR/vnc.html"
 
-# noVNC の HTML に Web Audio API 音同期ウィジェットを注入
+# noVNC の HTML に Web Audio リアルタイム音同期 ＆ MacBook マイクボタンを注入
 python3 - << 'PYEOF'
 import os, re
 novnc_dir = "/usr/share/novnc" if os.path.exists("/usr/share/novnc") else "/usr/local/share/novnc"
@@ -305,19 +366,22 @@ if os.path.exists(target_html):
     with open(target_html, "r", encoding="utf-8") as f:
         content = f.read()
 
-    audio_script = '''
-<!-- ANTIGRAVITY AUDIO INTEGRATION -->
+    hardware_ui_script = '''
+<!-- ANTIGRAVITY MACBOOK HARDWARE INTEGRATION -->
 <div id="live-audio-bar" style="position: fixed; top: 12px; right: 80px; z-index: 99999; background: rgba(15, 23, 42, 0.9); backdrop-filter: blur(8px); border: 1px solid rgba(56, 189, 248, 0.5); border-radius: 30px; padding: 6px 16px; display: flex; align-items: center; gap: 10px; color: #fff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); user-select: none;">
-  <span id="audio-toggle" style="cursor: pointer; font-size: 16px;" title="クリックでミュート/解除">🔊</span>
+  <span id="audio-toggle" style="cursor: pointer; font-size: 16px;" title="クリックで消音/解除">🔊</span>
   <span style="font-weight: bold; color: #38bdf8; font-size: 11px; letter-spacing: 0.5px;">LIVE SOUND</span>
-  <input id="audio-volume" type="range" min="0" max="1" step="0.05" value="0.8" style="width: 70px; cursor: pointer; accent-color: #38bdf8;">
+  <input id="audio-volume" type="range" min="0" max="1" step="0.05" value="0.8" style="width: 60px; cursor: pointer; accent-color: #38bdf8;">
+  <span id="mic-toggle-btn" style="cursor: pointer; font-size: 11px; font-weight: bold; color: #94a3b8; border: 1px solid #475569; padding: 2px 8px; border-radius: 12px; margin-left: 4px;" title="MacBookの内蔵マイクを仮想環境に接続">🎙️ MIC OFF</span>
 </div>
 <script>
 (function() {
   let audioCtx = null, gainNode = null, isRunning = false, nextStartTime = 0;
   const toggleBtn = document.getElementById('audio-toggle');
   const volumeSlider = document.getElementById('audio-volume');
+  const micBtn = document.getElementById('mic-toggle-btn');
   let currentVolume = 0.8;
+  let micActive = false, micStream = null, micAudioCtx = null;
 
   async function initWebAudio() {
     if (isRunning) return;
@@ -366,6 +430,45 @@ if os.path.exists(target_html):
     }
   }
 
+  // MacBook 内蔵マイクのトグル
+  async function toggleMic() {
+    const micUrl = window.location.origin.replace(/^https?:\\/\\/6080-/, (m) => m.replace('6080-', '8001-')) + '/mic_input';
+    if (!micActive) {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+        micAudioCtx = new AudioContext({ sampleRate: 44100 });
+        const source = micAudioCtx.createMediaStreamSource(micStream);
+        const processor = micAudioCtx.createScriptProcessor(4096, 1, 1);
+
+        processor.onaudioprocess = (e) => {
+          if (!micActive) return;
+          const input = e.inputBuffer.getChannelData(0);
+          const pcm16 = new Int16Array(input.length);
+          for (let i = 0; i < input.length; i++) {
+            pcm16[i] = Math.max(-1, Math.min(1, input[i])) * 32767;
+          }
+          fetch(micUrl, { method: 'POST', body: pcm16.buffer }).catch(() => {});
+        };
+
+        source.connect(processor);
+        processor.connect(micAudioCtx.destination);
+        micActive = true;
+        micBtn.textContent = '🎙️ MIC ON';
+        micBtn.style.color = '#10b981';
+        micBtn.style.borderColor = '#10b981';
+      } catch (err) {
+        alert('MacBookのマイクアクセス許可が必要です: ' + err.message);
+      }
+    } else {
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      if (micAudioCtx) micAudioCtx.close();
+      micActive = false;
+      micBtn.textContent = '🎙️ MIC OFF';
+      micBtn.style.color = '#94a3b8';
+      micBtn.style.borderColor = '#475569';
+    }
+  }
+
   document.addEventListener('click', () => {
     if (!audioCtx || audioCtx.state === 'suspended') {
       if (audioCtx) audioCtx.resume();
@@ -391,12 +494,17 @@ if os.path.exists(target_html):
     if (gainNode) gainNode.gain.value = currentVolume;
     toggleBtn.textContent = currentVolume === 0 ? '🔇' : '🔊';
   });
+
+  micBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleMic();
+  });
 })();
 </script>
-<!-- END ANTIGRAVITY AUDIO INTEGRATION -->
+<!-- END ANTIGRAVITY MACBOOK HARDWARE INTEGRATION -->
 '''
-    content = re.sub(r'<!-- ANTIGRAVITY AUDIO INTEGRATION -->.*?<!-- END ANTIGRAVITY AUDIO INTEGRATION -->', '', content, flags=re.DOTALL)
-    content = content.replace("</body>", f"{audio_script}\n</body>")
+    content = re.sub(r'<!-- ANTIGRAVITY.*?END ANTIGRAVITY.*?-->', '', content, flags=re.DOTALL)
+    content = content.replace("</body>", f"{hardware_ui_script}\n</body>")
     with open(target_html, "w", encoding="utf-8") as f:
         f.write(content)
 PYEOF
@@ -405,6 +513,6 @@ nohup websockify --web="$NOVNC_DIR" 6080 127.0.0.1:5901 > /content/novnc.log 2>&
 sleep 2
 
 echo "=================================================="
-echo "🎉 デスクトップ環境のセットアップが完了しました！"
+echo "🎉 デスクトップ＆MacBookハードウェア直結環境が起動しました！"
 echo "=================================================="
 exit 0
