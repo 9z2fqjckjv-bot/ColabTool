@@ -95,6 +95,7 @@ if [ -n "$CRD_CODE" ]; then
     fi
 
     echo "CRD ホスト起動を実行中 (ユーザー: colabuser)..."
+    pkill -u colabuser -f chrome-remote-desktop 2>/dev/null || true
     service dbus start > /dev/null 2>&1 || true
     sudo -u colabuser bash -c "$CMD" > /content/crd_setup.log 2>&1 || true
     nohup sudo -u colabuser /opt/google/chrome-remote-desktop/chrome-remote-desktop --foreground > /content/crd_run.log 2>&1 &
