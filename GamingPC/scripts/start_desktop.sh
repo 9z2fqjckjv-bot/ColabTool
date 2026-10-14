@@ -71,6 +71,16 @@ if [ -n "$CRD_CODE" ]; then
         fi
     fi
 
+    # systemctl モック配置 (start-hostのsystemdエラー回避)
+    cat << 'EOF' > /usr/local/bin/systemctl
+#!/bin/bash
+if [ "$1" = "is-active" ]; then
+    echo "active"
+fi
+exit 0
+EOF
+    chmod +x /usr/local/bin/systemctl
+
     # colabuserの存在確認・設定 (CRDはroot実行不可のため)
     if ! id -u colabuser >/dev/null 2>&1; then
         useradd -m -s /bin/bash -G sudo,chrome-remote-desktop colabuser

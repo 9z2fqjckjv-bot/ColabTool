@@ -48,6 +48,16 @@ if ! dpkg -s chrome-remote-desktop > /dev/null 2>&1; then
     rm -f /tmp/crd.deb
 fi
 
+# Colab/Docker環境用 systemctl モック (CRDのstart-hostがsystemd不在でクラッシュするのを防ぐ)
+cat << 'EOF' > /usr/local/bin/systemctl
+#!/bin/bash
+if [ "$1" = "is-active" ]; then
+    echo "active"
+fi
+exit 0
+EOF
+chmod +x /usr/local/bin/systemctl
+
 # CRD用一般ユーザー (colabuser) の作成 (CRDはrootでの直接実行を拒否するため)
 if ! id -u colabuser >/dev/null 2>&1; then
     useradd -m -s /bin/bash -G sudo,chrome-remote-desktop colabuser
