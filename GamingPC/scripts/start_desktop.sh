@@ -63,8 +63,9 @@ echo ">> [4/4] リモート接続方式の構成..."
 if [ -n "$CRD_CODE" ]; then
     echo "Chrome Remote Desktop を構成中..."
     if ! python3 -c "import dbus" > /dev/null 2>&1; then
-        echo "python3-dbus パッケージをインストール中..."
-        apt-get install -y -qq python3-dbus python3-gi libdbus-1-3 > /dev/null 2>&1 || true
+        echo "python3-dbus パッケージをインストール & ビルド中..."
+        apt-get install -y -qq python3-dbus python3-gi libdbus-1-3 libdbus-1-dev libglib2.0-dev python3-dev > /dev/null 2>&1 || true
+        python3 -m pip install --no-cache-dir dbus-python > /dev/null 2>&1 || true
     fi
 
     # colabuserの存在確認・設定 (CRDはroot実行不可のため)
