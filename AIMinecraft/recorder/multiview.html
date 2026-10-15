@@ -113,19 +113,33 @@
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      background: radial-gradient(circle at center, #161b22 0%, #0d1117 100%);
+      background: radial-gradient(circle at center, #1a2333 0%, #0d131f 100%);
+      background-image: 
+        linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+      background-size: 32px 32px;
       color: #c9d1d9;
-      gap: 12px;
+      gap: 14px;
       z-index: 5;
+    }
+    .placeholder::before {
+      content: "";
+      position: absolute;
+      width: 140px;
+      height: 140px;
+      border: 1px dashed rgba(88, 166, 255, 0.35);
+      border-radius: 50%;
+      pointer-events: none;
     }
     .placeholder.hidden {
       display: none;
     }
     .spinner {
-      width: 38px;
-      height: 38px;
+      width: 44px;
+      height: 44px;
       border: 3px solid rgba(255, 255, 255, 0.1);
       border-top-color: #58a6ff;
+      border-right-color: #58a6ff;
       border-radius: 50%;
       animation: spin 1s infinite linear;
     }
@@ -317,11 +331,21 @@
         if (!streamState[port].online) {
           streamState[port].online = true;
           statusBadge.classList.add('online');
-          iframe.src = `http://127.0.0.1:${port}/`;
+          
+          // イベントリスナーを src 割り当て前に設定
           iframe.onload = () => {
             placeholder.classList.add('hidden');
             iframe.classList.add('loaded');
           };
+          iframe.src = `http://127.0.0.1:${port}/`;
+
+          // 高速ロードまたはイベント遅延時のフェイルセーフ表示
+          setTimeout(() => {
+            if (streamState[port].online) {
+              placeholder.classList.add('hidden');
+              iframe.classList.add('loaded');
+            }
+          }, 1500);
         }
       } catch (err) {
         // 未接続または切断

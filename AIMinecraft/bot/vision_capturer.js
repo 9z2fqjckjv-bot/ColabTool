@@ -42,7 +42,11 @@ class VisionCapturer {
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--disable-gpu',
+          '--enable-webgl',
+          '--ignore-gpu-blocklist',
+          '--use-gl=angle',
+          '--use-angle=swiftshader',
+          '--enable-unsafe-swiftshader',
           '--no-first-run',
           '--no-zygote',
           '--single-process'

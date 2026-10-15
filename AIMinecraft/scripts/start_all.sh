@@ -82,6 +82,11 @@ echo ""
 
 if [ "$STARTED" = true ]; then
     echo "✅ Minecraftサーバーが正常に起動しました！(ポート: 25565)"
+    # 拠点の安全確保: モブ攻撃・クリーパー爆発・ゾンビドア破壊による拠点チェスト・ベッド・家具破壊を完全無効化
+    if [ -p "$PIPE_PATH" ]; then
+        echo "gamerule mobGriefing false" > "$PIPE_PATH"
+        echo "🛡️ gamerule mobGriefing false を設定し、モブによる拠点ブロック破壊を無効化しました。"
+    fi
 else
     echo "⚠️ 起動確認がタイムアウトしましたが、バックグラウンドで起動継続中です。"
 fi

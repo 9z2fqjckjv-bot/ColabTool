@@ -17,6 +17,14 @@ try {
 const fs = require('fs');
 const path = require('path');
 
+// プロセス全体の未処理Promise拒否・例外ハンドラ（起床時や非同期処理での予期せぬ切断・強制ログアウトを完全防止）
+process.on('unhandledRejection', (reason, promise) => {
+  console.warn('⚠️ [Process Safeguard] 未処理のPromise拒否を捕捉（強制終了を防止）:', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.warn('⚠️ [Process Safeguard] 未処理の例外を捕捉（強制終了を防止）:', err?.message || err);
+});
+
 const personas = require('./persona');
 const AIBrain = require('./brain');
 const VisionCapturer = require('./vision_capturer');
@@ -33,11 +41,51 @@ try {
 const brain = new AIBrain();
 const activeBots = {};
 
-// 拠点座標の定義 (ユーザー指定画像 F3: Block 95 63 44 / 看板「拠点」)
+/**
+ * 拠点の精密座標範囲（動画 2026-10-15 12.45.18.mov より正確に算出）
+ * - 拠点外枠全体: X:[92, 97], Y:[62, 68], Z:[39, 47]
+ * - 拠点内部歩行領域: X:[93, 96], Y:63, Z:[40, 46]
+ * - 玄関出入り口ドア: (94, 63, 39) Facing: north
+ * - 拠点中心: (95, 63, 43)
+ */
+const BASE_BOUNDS = {
+  minX: 92,
+  maxX: 97,
+  minY: 62,
+  maxY: 68,
+  minZ: 39,
+  maxZ: 47,
+  interior: {
+    minX: 93,
+    maxX: 96,
+    minY: 63,
+    maxY: 65,
+    minZ: 40,
+    maxZ: 46
+  },
+  door: { x: 94, y: 63, z: 39 },
+  // 拠点内部の4隅＋中央巡回パトロールウェイポイント
+  patrolWaypoints: [
+    { x: 94, y: 63, z: 41, desc: '北西ドア前エリア' },
+    { x: 96, y: 63, z: 41, desc: '北東壁側エリア' },
+    { x: 96, y: 63, z: 45, desc: '南東奥エリア' },
+    { x: 94, y: 63, z: 45, desc: '南西ベッド前エリア' },
+    { x: 95, y: 63, z: 43, desc: '中央巡回通路' }
+  ]
+};
+
+// 拠点代表座標 (看板「拠点」または中央座標 95, 63, 44)
 const BASE_COORDINATES = {
   x: parseFloat(process.env.BASE_X || '95'),
   y: parseFloat(process.env.BASE_Y || '63'),
   z: parseFloat(process.env.BASE_Z || '44')
+};
+
+// 拠点入り口ドアの座標 (Block 94 63 39 / Facing: north)
+const BASE_DOOR_COORDINATES = {
+  x: parseFloat(process.env.BASE_DOOR_X || '94'),
+  y: parseFloat(process.env.BASE_DOOR_Y || '63'),
+  z: parseFloat(process.env.BASE_DOOR_Z || '39')
 };
 
 /**
@@ -92,11 +140,62 @@ function isBlockOpen(block) {
 }
 
 /**
+ * 対象ブロックが「ドアより拠点側 (Z >= 39)」またはチェスト・ベッドなどの重要保護ブロックか判定
+ */
+function isBaseProtectedBlock(block) {
+  if (!block) return false;
+  const pos = block.position;
+  if (!pos) return false;
+
+  // 1. 重要家具・拠点設備の名称判定
+  const name = block.name || '';
+  const isImportantEquipment = [
+    'chest', 'trapped_chest', 'barrel', 'ender_chest', 'shulker_box',
+    'bed', 'crafting_table', 'furnace', 'blast_furnace', 'smoker',
+    'door', 'fence_gate', 'trapdoor', 'anvil', 'brewing_stand',
+    'torch', 'lantern', 'sign'
+  ].some(keyword => name.includes(keyword));
+
+  // 2. 拠点のドアより拠点側（Z >= 39 かつ拠点精密境界エリア内）判定
+  // ドアは Z=39、北向き(Facing north / negative Z)が屋外、南側(positive Z >= 39)が屋内
+  const isInBaseArea = (
+    pos.x >= BASE_BOUNDS.minX - 1 && pos.x <= BASE_BOUNDS.maxX + 1 &&
+    pos.y >= BASE_BOUNDS.minY - 1 && pos.y <= BASE_BOUNDS.maxY + 1 &&
+    pos.z >= BASE_BOUNDS.door.z && pos.z <= BASE_BOUNDS.maxZ + 1
+  );
+
+  return isInBaseArea || isImportantEquipment;
+}
+
+/**
  * 拠点のドア（出入り口）を探索し、出入り口ペア（ドア位置、外側座標、内側座標）を返す
- * 直線移動ではなく、ドアを正規の出入り口として認識させるためのWaypoint生成
+ * 指定座標 (94, 63, 39) を最優先玄関として確実に解決
  */
 function findBaseDoors(bot, basePos) {
   const { Vec3 } = require('vec3');
+  const doorList = [];
+
+  // 1. ユーザー指定の玄関ドア座標 (Block 94 63 39 / 隣の 95 63 39) を最優先でチェック
+  const designatedDoors = [
+    new Vec3(BASE_DOOR_COORDINATES.x, BASE_DOOR_COORDINATES.y, BASE_DOOR_COORDINATES.z),
+    new Vec3(BASE_DOOR_COORDINATES.x + 1, BASE_DOOR_COORDINATES.y, BASE_DOOR_COORDINATES.z)
+  ];
+
+  for (const dpos of designatedDoors) {
+    const block = bot.blockAt(dpos);
+    // 北向き(Facing north / negative Z)が屋外、南向き(positive Z)が拠点内
+    const outsidePos = new Vec3(dpos.x + 0.5, dpos.y, dpos.z - 2.0); // Z < 39 (屋外・水辺側)
+    const insidePos  = new Vec3(dpos.x + 0.5, dpos.y, dpos.z + 2.5); // Z > 39 (拠点内部側)
+    doorList.push({
+      block: block || { position: dpos, name: 'oak_door' },
+      pos: dpos,
+      outsidePos,
+      insidePos,
+      isDesignated: true
+    });
+  }
+
+  // 2. 周囲のドアも探索してリストに追加
   try {
     const doorPositions = bot.findBlocks({
       matching: block => isDoorOrGate(block),
@@ -104,67 +203,50 @@ function findBaseDoors(bot, basePos) {
       count: 12
     });
 
-    const doors = [];
     for (const pos of doorPositions) {
+      if (designatedDoors.some(dp => dp.equals(pos))) continue; // 既に登録済み
       const block = bot.blockAt(pos);
       if (!block) continue;
-      // 2マスのドアの場合、下側（lower）のみを代表として扱う
       const props = (typeof block.getProperties === 'function') ? block.getProperties() : (block._properties || {});
       if (props.half === 'upper') continue;
 
-      const offsets = [
-        new Vec3(1, 0, 0),
-        new Vec3(-1, 0, 0),
-        new Vec3(0, 0, 1),
-        new Vec3(0, 0, -1)
-      ];
-
-      let outsidePos = null;
-      let insidePos = null;
-      let maxDist = -1;
-      let minDist = 99999;
-
-      for (const off of offsets) {
-        const checkPos = pos.plus(off);
-        const standBlock = bot.blockAt(checkPos);
-        const groundBlock = bot.blockAt(checkPos.offset(0, -1, 0));
-        // 通行可能（足元が空気/透過、床が固体）
-        if (standBlock && (standBlock.name === 'air' || standBlock.boundingBox === 'empty') &&
-            groundBlock && groundBlock.boundingBox === 'block') {
-          const d = checkPos.distanceTo(basePos);
-          if (d > maxDist) {
-            maxDist = d;
-            outsidePos = checkPos;
-          }
-          if (d < minDist) {
-            minDist = d;
-            insidePos = checkPos;
-          }
-        }
-      }
-
-      if (outsidePos && insidePos && !outsidePos.equals(insidePos)) {
-        doors.push({ block, pos, outsidePos, insidePos });
-      }
-    }
-
-    if (doors.length > 0) {
-      doors.sort((a, b) => a.pos.distanceTo(basePos) - b.pos.distanceTo(basePos));
-      return doors;
+      // 北側(Z < pos.z)が屋外、南側(Z > pos.z)が拠点内
+      const outsidePos = new Vec3(pos.x + 0.5, pos.y, pos.z - 1.8);
+      const insidePos  = new Vec3(pos.x + 0.5, pos.y, pos.z + 1.8);
+      doorList.push({ block, pos, outsidePos, insidePos, isDesignated: false });
     }
   } catch (_) {}
-  return [];
+
+  // 指定ドアを先頭にして距離順でソート
+  doorList.sort((a, b) => {
+    if (a.isDesignated && !b.isDesignated) return -1;
+    if (!a.isDesignated && b.isDesignated) return 1;
+    return a.pos.distanceTo(basePos) - b.pos.distanceTo(basePos);
+  });
+
+  return doorList;
 }
 
 /**
  * 出入り口（ドア）を経由して安全に部屋に入室または退室する
- * enter === true: 外側 -> ドアを開けて通過 -> 内側（入室）
- * enter === false: 内側 -> ドアを開けて通過 -> 外側（退室）
- * （ドア以外から部屋に入ったり出たりするのを防ぐ）
+ * enter === true: 屋外 (Z < 39) -> ドアを開けて通過 -> 拠点内 (Z >= 39)
+ * enter === false: 拠点内 (Z >= 39) -> ドアを開けて通過 -> 屋外 (Z < 39)
  */
 async function navigateThroughDoor(bot, enter = true) {
   if (!bot.entity) return false;
   const botName = bot.username;
+  const currentPos = bot.entity.position;
+
+  // 既に目的の側にいる場合はスキップ
+  if (enter && currentPos.z >= 41.0) {
+    console.log(`ℹ️ [${botName}] 既に拠点内(Z=${Math.round(currentPos.z)})にいるためドア通過をスキップします。`);
+    return true;
+  }
+  if (!enter && currentPos.z <= 37.5) {
+    console.log(`ℹ️ [${botName}] 既に屋外(Z=${Math.round(currentPos.z)})にいるためドア通過をスキップします。`);
+    return true;
+  }
+
   const basePos = findBaseLocation(bot);
   const doors = findBaseDoors(bot, basePos);
   if (doors.length === 0) return false;
@@ -174,42 +256,55 @@ async function navigateThroughDoor(bot, enter = true) {
   const endWaypoint = enter ? targetDoor.insidePos : targetDoor.outsidePos;
 
   try {
-    console.log(`🚪 [${botName}] 出入り口ドア経由で${enter ? '部屋へ入室' : '部屋から屋外へ退室'}します...`);
+    console.log(`🚪 [${botName}] 拠点の出入り口ドア(X:${targetDoor.pos.x}, Y:${targetDoor.pos.y}, Z:${targetDoor.pos.z})経由で${enter ? '拠点へ入室' : '屋外へ退室'}します...`);
+
     // 1. まずドア手前のウェイポイントへ移動
-    bot.pathfinder.setGoal(new goals.GoalNear(startWaypoint.x, startWaypoint.y, startWaypoint.z, 0.8));
+    bot.pathfinder.setGoal(new goals.GoalNear(startWaypoint.x, startWaypoint.y, startWaypoint.z, 0.9));
     const startApproach = Date.now();
-    while (bot.entity && bot.entity.position.distanceTo(startWaypoint) > 1.2) {
-      if (Date.now() - startApproach > 12000) break;
+    while (bot.entity && bot.entity.position.distanceTo(startWaypoint) > 1.3) {
+      if (Date.now() - startApproach > 14000) break;
       await new Promise(r => setTimeout(r, 200));
     }
 
     // 2. ドアの開閉状態を確認し、閉じている場合は開ける
-    const doorBlock = bot.blockAt(targetDoor.pos);
+    let doorBlock = bot.blockAt(targetDoor.pos);
+    if (!doorBlock || !isDoorOrGate(doorBlock)) {
+      // 隣のドア (95 63 39) もチェック
+      const altPos = targetDoor.pos.offset(1, 0, 0);
+      const altBlock = bot.blockAt(altPos);
+      if (altBlock && isDoorOrGate(altBlock)) {
+        doorBlock = altBlock;
+      }
+    }
+
     if (doorBlock && isDoorOrGate(doorBlock)) {
       if (!isBlockOpen(doorBlock)) {
-        await bot.lookAt(targetDoor.pos.offset(0.5, 0.5, 0.5));
+        await bot.lookAt(doorBlock.position.offset(0.5, 0.5, 0.5));
         await bot.activateBlock(doorBlock);
-        await new Promise(r => setTimeout(r, 250));
-        console.log(`🚪 [${botName}] 閉じていたドアを開けました。`);
+        await new Promise(r => setTimeout(r, 300));
+        console.log(`🚪 [${botName}] 拠点のドアを開けました。`);
       }
     }
 
     // 3. ドアを通過して反対側のウェイポイントへ移動
-    bot.pathfinder.setGoal(new goals.GoalNear(endWaypoint.x, endWaypoint.y, endWaypoint.z, 0.6));
+    bot.pathfinder.setGoal(new goals.GoalNear(endWaypoint.x, endWaypoint.y, endWaypoint.z, 0.7));
     const passApproach = Date.now();
-    while (bot.entity && bot.entity.position.distanceTo(endWaypoint) > 1.0) {
-      if (Date.now() - passApproach > 8000) break;
+    while (bot.entity && bot.entity.position.distanceTo(endWaypoint) > 1.2) {
+      if (Date.now() - passApproach > 10000) break;
       await new Promise(r => setTimeout(r, 200));
     }
 
-    // 4. 通過後にドアを振り返って閉める（防犯・モンスター侵入防止）
-    const passedDoorBlock = bot.blockAt(targetDoor.pos);
-    if (passedDoorBlock && isDoorOrGate(passedDoorBlock) && isBlockOpen(passedDoorBlock)) {
-      await bot.lookAt(targetDoor.pos.offset(0.5, 0.5, 0.5));
-      await bot.activateBlock(passedDoorBlock);
-      console.log(`🚪 [${botName}] 通過後にドアを閉めました（防犯戸締まり完了）。`);
+    // 4. 通過後にドアを振り返って閉める（防犯・モンスター侵入完全遮断）
+    if (doorBlock && isDoorOrGate(doorBlock)) {
+      const refreshedDoor = bot.blockAt(doorBlock.position);
+      if (refreshedDoor && isBlockOpen(refreshedDoor)) {
+        await bot.lookAt(doorBlock.position.offset(0.5, 0.5, 0.5));
+        await bot.activateBlock(refreshedDoor);
+        console.log(`🚪 [${botName}] 通過後にドアをしっかり閉めました（防犯戸締まり完了）。`);
+      }
     }
 
+    recordDiary(botName, enter ? '拠点入室' : '拠点退室', `拠点ドア(94, 63, 39)を開けて${enter ? '入室' : '退室'}し、通過後に戸締まりしました。`, bot.entity.position);
     return true;
   } catch (err) {
     console.warn(`[${botName}] ドア通過ナビゲーション注意:`, err.message);
@@ -601,6 +696,20 @@ async function engageHostileMob(bot, hostile) {
     console.log(`⚔️ [${botName}] 敵対モブ「${hostile.name}」を迎撃！斧/剣を構えて戦闘を開始します。`);
     recordDiary(botName, '戦闘開始', `武器（斧/剣）を構えて敵対モブ「${hostile.name}」の討伐を開始しました。`, bot.entity.position);
 
+    // 拠点内(Z>=39)にいる場合のドア防衛ロジック
+    const isBotInBase = bot.entity.position.z >= 39.0;
+    const isHostileOutside = hostile.position.z < 39.0;
+    if (isBotInBase && isHostileOutside) {
+      // 敵が屋外でBotが拠点内の場合、ドアが開いていれば即座に閉めて防犯
+      const dpos = { x: BASE_DOOR_COORDINATES.x, y: BASE_DOOR_COORDINATES.y, z: BASE_DOOR_COORDINATES.z };
+      const doorBlock = bot.blockAt(dpos);
+      if (doorBlock && isDoorOrGate(doorBlock) && isBlockOpen(doorBlock)) {
+        await bot.lookAt(doorBlock.position.offset(0.5, 0.5, 0.5));
+        await bot.activateBlock(doorBlock);
+        console.log(`🛡️ [${botName}] 屋外の敵対モブ侵入を防ぐため、拠点のドアを閉めて戸締まりしました。`);
+      }
+    }
+
     if (bot.pvp) {
       bot.pvp.attack(hostile);
 
@@ -815,18 +924,39 @@ function createBot(personaKey, index) {
       });
     }
 
-    // 通常移動時に地面や建築ブロックを不用意に掘り崩さないよう保護
-    const protectBlocks = ['dirt', 'grass_block', 'stone', 'deepslate', 'sand', 'gravel', 'bedrock', 'cobblestone', 'oak_planks', 'spruce_planks', 'birch_planks'];
+    // 通常移動時および戦闘時に拠点家具や建築ブロックを不用意に掘り崩さないよう完全保護
+    const protectBlocks = [
+      'dirt', 'grass_block', 'stone', 'deepslate', 'sand', 'gravel', 'bedrock', 'cobblestone',
+      'oak_planks', 'spruce_planks', 'birch_planks', 'cherry_planks', 'bamboo_planks',
+      'chest', 'trapped_chest', 'barrel', 'ender_chest',
+      'white_bed', 'orange_bed', 'magenta_bed', 'light_blue_bed', 'yellow_bed', 'lime_bed',
+      'pink_bed', 'gray_bed', 'light_gray_bed', 'cyan_bed', 'purple_bed', 'blue_bed',
+      'brown_bed', 'green_bed', 'red_bed', 'black_bed',
+      'crafting_table', 'furnace', 'blast_furnace', 'smoker', 'anvil',
+      'oak_door', 'spruce_door', 'birch_door', 'iron_door', 'oak_trapdoor', 'spruce_trapdoor',
+      'glass', 'glass_pane', 'torch', 'wall_torch', 'lantern', 'sign', 'wall_sign'
+    ];
     for (const bName of protectBlocks) {
       const b = mcData.blocksByName[bName];
       if (b) defaultMove.blocksCantBreak.add(b.id);
     }
     bot.pathfinder.setMovements(defaultMove);
 
+    // 拠点エリア(Z>=39)およびチェスト・ベッド等重要ブロックの完全破壊防止フック
+    const originalDig = bot.dig.bind(bot);
+    bot.dig = async function(block, forceLook, digFace) {
+      if (isBaseProtectedBlock(block)) {
+        console.warn(`🛡️ [${botName}] 拠点保護エリア(Z>=39)・重要家具の破壊を完全に防止しました: ${block.name} at (${block.position})`);
+        recordDiary(botName, '拠点保護防御', `拠点側ブロック「${block.name}」の破壊を未然に防止しました。`, bot.entity.position);
+        return Promise.resolve();
+      }
+      return originalDig(block, forceLook, digFace);
+    };
+
     // 視線 (First-Person POV) Prismarine-Viewer 起動
     if (viewer) {
       try {
-        viewer(bot, { port: viewerPort, firstPerson: true });
+        viewer(bot, { port: viewerPort, firstPerson: true, viewDistance: 4 });
         console.log(`🎥 [${botName}] 一人称視点Webストリーム配信中 -> ポート ${viewerPort}`);
       } catch (err) {
         console.warn(`[${botName}] Viewer起動スキップ:`, err.message);
@@ -989,6 +1119,25 @@ function createBot(personaKey, index) {
       toggleNearbyDoors(bot, isClose);
       return;
     }
+    if (strippedMsg.startsWith('!call') || strippedMsg.startsWith('!reconnect') || strippedMsg.startsWith('!join') || strippedMsg.startsWith('!呼び戻し') || strippedMsg.startsWith('!おいで')) {
+      const parts = strippedMsg.split(/\s+/);
+      const target = parts[1];
+      if (!target || target === 'all' || target === '全員') {
+        bot.chat('ログアウト中のAIPlayer全員をサーバーへ呼び戻します！');
+        personaKeys.forEach((k, i) => {
+          reconnectBot(k, i * 2500);
+        });
+      } else {
+        const foundKey = personaKeys.find(k => k.toLowerCase() === target.toLowerCase() || personas[k]?.name.toLowerCase() === target.toLowerCase());
+        if (foundKey) {
+          bot.chat(`${personas[foundKey].name} をサーバーへ呼び戻します！`);
+          reconnectBot(foundKey, 1000);
+        } else {
+          bot.chat(`対象「${target}」が見つかりません。(利用可能: ${personaKeys.join(', ')})`);
+        }
+      }
+      return;
+    }
 
     // 客観的環境・現在地ステータスのリアルタイム集計 (水没・溶岩・作業台/かまど有無)
     const botState = getBotEnvironmentalState(bot);
@@ -1043,11 +1192,27 @@ function createBot(personaKey, index) {
   });
 
   bot.on('kicked', reason => {
-    console.warn(`[${botName}] KICKされました:`, JSON.stringify(reason));
+    console.warn(`⚠️ [${botName}] KICKされました:`, JSON.stringify(reason));
+    recordDiary(botName, '切断(KICK)', `サーバーからKICKされました: ${JSON.stringify(reason)}`);
+    delete activeBots[personaKey];
+    // 不意のキック時、7秒後に自動で呼び戻し
+    if (typeof reconnectBot === 'function') {
+      reconnectBot(personaKey, 7000);
+    }
+  });
+
+  bot.on('end', reason => {
+    console.warn(`🔌 [${botName}] サーバーから切断（ログアウト）しました:`, reason);
+    recordDiary(botName, 'ログアウト', `サーバーから切断されました: ${reason}`);
+    delete activeBots[personaKey];
+    // 不意のログアウト時、5秒後に自動で呼び戻し
+    if (typeof reconnectBot === 'function') {
+      reconnectBot(personaKey, 5000);
+    }
   });
 
   bot.on('error', err => {
-    console.error(`[${botName}] エラー:`, err.message);
+    console.error(`❌ [${botName}] エラー:`, err.message);
   });
 
   activeBots[personaKey] = bot;
@@ -1594,107 +1759,324 @@ async function depositAllItemsToChest(bot, basePos) {
 }
 
 /**
+ * 拠点周囲のベッドを検索し、重複（head/foot 2マス問題）を排除して「開いている（空いている）ベッド」を優先リスト化する
+ */
+function findAvailableBeds(bot, maxDistance = 24) {
+  const bedBlockPositions = bot.findBlocks({
+    matching: block => block && block.name && block.name.endsWith('_bed'),
+    maxDistance: maxDistance,
+    count: 24
+  });
+
+  const uniqueBeds = [];
+  const visitedKeys = new Set();
+
+  for (const pos of bedBlockPositions) {
+    const block = bot.blockAt(pos);
+    if (!block) continue;
+
+    const props = (typeof block.getProperties === 'function') ? block.getProperties() : (block._properties || {});
+    // headブロック（枕元）を代表として採用。footの場合はhead側の座標を登録して重複を防止
+    let headPos = pos;
+    if (props.part === 'foot') {
+      // footの場合、facingの方向にheadがある
+      const facing = props.facing || 'north';
+      const offsetMap = {
+        north: { x: 0, z: -1 },
+        south: { x: 0, z: 1 },
+        east: { x: 1, z: 0 },
+        west: { x: -1, z: 0 }
+      };
+      const off = offsetMap[facing] || { x: 0, z: 0 };
+      const computedHead = pos.offset(off.x, 0, off.z);
+      const headBlock = bot.blockAt(computedHead);
+      if (headBlock && headBlock.name && headBlock.name.endsWith('_bed')) {
+        headPos = computedHead;
+      }
+    }
+
+    const key = `${headPos.x},${headPos.y},${headPos.z}`;
+    if (visitedKeys.has(key)) continue;
+    visitedKeys.add(key);
+
+    const actualBedBlock = bot.blockAt(headPos) || block;
+    const actualProps = (typeof actualBedBlock.getProperties === 'function') ? actualBedBlock.getProperties() : (actualBedBlock._properties || {});
+
+    // 1. ブロック自体の occupied 属性チェック
+    const isOccupiedProp = actualProps.occupied === true || String(actualProps.occupied) === 'true';
+
+    // 2. 他のプレイヤーやBotが既にこのベッドで寝ているかチェック
+    const isPlayerSleeping = Object.values(bot.entities || {}).some(e => {
+      if (!e || e === bot.entity) return false;
+      const d = e.position.distanceTo(headPos.offset(0.5, 0.5, 0.5));
+      return d < 1.8;
+    });
+
+    const isOtherBotSleeping = Object.values(activeBots).some(otherBot => {
+      if (!otherBot || otherBot === bot || !otherBot.entity) return false;
+      if (otherBot.isSleeping && otherBot.entity.position.distanceTo(headPos) < 2.2) return true;
+      return false;
+    });
+
+    const isAvailable = !isOccupiedProp && !isPlayerSleeping && !isOtherBotSleeping;
+
+    uniqueBeds.push({
+      pos: headPos,
+      block: actualBedBlock,
+      isAvailable,
+      dist: bot.entity ? bot.entity.position.distanceTo(headPos) : 0
+    });
+  }
+
+  // 空いているベッドを最優先、次に距離が近い順にソート
+  uniqueBeds.sort((a, b) => {
+    if (a.isAvailable && !b.isAvailable) return -1;
+    if (!a.isAvailable && b.isAvailable) return 1;
+    return a.dist - b.dist;
+  });
+
+  return uniqueBeds;
+}
+
+/**
  * 拠点内のベッドを探して就寝可能時刻に確実に就寝する
- * （Botごとのベッド専有・夕暮れ待機・モンスター迎撃・寝付くまでの粘り強いリトライ）
+ * （空いているベッドを自動判定・誰かが寝ていれば即座に別の空きベッドへ切り替え・朝まで就寝）
  */
 async function goToBedAndSleep(bot, basePos, personaKey) {
   if (!bot.entity) return false;
   const botName = bot.username;
 
-  console.log(`🛏️ [${botName}] 拠点内のベッドを探索中...`);
+  console.log(`🛏️ [${botName}] 拠点内の空いているベッドを探索中...`);
 
-  // 周囲のベッドを検索
-  const bedBlockPositions = bot.findBlocks({
-    matching: block => block && block.name && block.name.endsWith('_bed'),
-    maxDistance: 24,
-    count: 12
-  });
+  // 重複のない独立したベッドリストを取得
+  let availableBeds = findAvailableBeds(bot, 24);
 
-  if (!bedBlockPositions || bedBlockPositions.length === 0) {
+  if (!availableBeds || availableBeds.length === 0) {
     console.warn(`⚠️ [${botName}] 拠点付近にベッドが見つかりませんでした。拠点内で安全に朝を待ちます。`);
     recordDiary(botName, '待機', 'ベッドが見当たらないため、拠点内で朝まで警戒待機します。', bot.entity.position);
     bot.chat('ベッドが見当たらないため、拠点内で見張りをして朝を待ちますね。');
     return false;
   }
 
-  // 4体のBot（Gemini, ChatGPT, Claude, Grok）がお互いに重複しないよう専有ベッドを決定
-  const botKeys = ['Gemini', 'ChatGPT', 'Claude', 'Grok'];
-  const myIndex = botKeys.indexOf(personaKey);
-  let chosenBedPos = null;
-
-  // 1. 各Botの固定インデックスに応じたベッドを最優先
-  if (myIndex >= 0 && myIndex < bedBlockPositions.length) {
-    chosenBedPos = bedBlockPositions[myIndex];
-  } else {
-    // 他のBotが使用・予約していないベッドを探索
-    for (const bPos of bedBlockPositions) {
-      const isOccupied = Object.values(activeBots).some(otherBot => {
-        if (otherBot === bot || !otherBot.entity) return false;
-        return (otherBot.isSleeping || otherBot.customState?.targetBedPos?.equals?.(bPos)) &&
-          otherBot.entity.position.distanceTo(bPos) < 2.0;
-      });
-      if (!isOccupied) {
-        chosenBedPos = bPos;
-        break;
-      }
-    }
-  }
-  if (!chosenBedPos) chosenBedPos = bedBlockPositions[0];
+  // 空いているベッド（isAvailable === true）を優先選択
+  let chosenBed = availableBeds.find(b => b.isAvailable) || availableBeds[0];
+  let chosenBedPos = chosenBed.pos;
   bot.customState.targetBedPos = chosenBedPos;
 
-  const bedBlock = bot.blockAt(chosenBedPos);
+  console.log(`🛏️ [${botName}] 選択されたベッド: (${chosenBedPos.x}, ${chosenBedPos.y}, ${chosenBedPos.z}) [空き状態: ${chosenBed.isAvailable ? '🟢 空き' : '🔴 使用中'}]`);
 
-  // ベッドの枕元に接近
+  // ベッドの枕元へ移動
   try {
-    bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.4));
-    for (let i = 0; i < 25; i++) {
+    bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.2));
+    for (let i = 0; i < 30; i++) {
       if (!bot.entity) break;
-      if (bot.entity.position.distanceTo(chosenBedPos) <= 1.8) break;
+      if (bot.entity.position.distanceTo(chosenBedPos) <= 1.6) break;
       await new Promise(r => setTimeout(r, 200));
     }
     bot.pathfinder.setGoal(null);
     await bot.lookAt(chosenBedPos.offset(0.5, 0.5, 0.5));
   } catch (_) {}
 
-  // 就寝可能時刻（12542 ticks）までベッド横で待機
-  console.log(`⏳ [${botName}] 就寝可能時刻（夕暮れから夜: 12542 ticks）をベッド横で待機中...`);
+  // 就寝可能時刻（夕暮れ: 12542 ticks）までベッド横で待機
+  console.log(`⏳ [${botName}] 就寝可能時刻（12542 ticks）をベッド横で待機中...`);
   const startWait = Date.now();
   while (bot.time && (bot.time.timeOfDay < 12542 || bot.time.timeOfDay > 23000) && !bot.isRaining) {
-    if (Date.now() - startWait > 65000) break; // 最大65秒待機
+    if (Date.now() - startWait > 65000) break;
     await new Promise(r => setTimeout(r, 1000));
   }
 
-  // 必ず寝付くまで粘り強くリトライ（最大10回）
-  for (let attempt = 1; attempt <= 10; attempt++) {
-    if (bot.isSleeping) break;
+  // 必ず寝付くまで粘り強くリトライ（最大15回）＆使用中なら即座に別の空きベッドへ切り替え
+  for (let attempt = 1; attempt <= 15; attempt++) {
+    if (bot.isSleeping) {
+      console.log(`😴 [${botName}] 既に就寝状態を確認しました。`);
+      break;
+    }
+
     try {
       const currentBed = bot.blockAt(chosenBedPos);
-      if (currentBed) {
+      if (currentBed && currentBed.name && currentBed.name.endsWith('_bed')) {
         await bot.sleep(currentBed);
-        console.log(`😴 [${botName}] ベッドに入り就寝しました。（試行 ${attempt}回目）`);
-        recordDiary(botName, '就寝', '拠点のベッドで眠りにつきました。朝までぐっすり眠ります。', bot.entity.position);
+        console.log(`😴 [${botName}] 開いているベッドに入り就寝しました！（試行 ${attempt}回目 / 座標: ${chosenBedPos.x}, ${chosenBedPos.y}, ${chosenBedPos.z}）`);
+        recordDiary(botName, '就寝', `拠点の開いているベッド(${chosenBedPos.x}, ${chosenBedPos.y}, ${chosenBedPos.z})で眠りにつきました。`, bot.entity.position);
         bot.chat('おやすみなさい…朝まで寝ます。');
         break;
+      } else {
+        throw new Error('Bed block not found at target position');
       }
     } catch (sleepErr) {
-      console.warn(`[${botName}] 就寝試行 (${attempt}/10):`, sleepErr.message);
+      const errMsg = sleepErr.message || '';
+      console.warn(`[${botName}] 就寝試行 (${attempt}/15) 失敗:`, errMsg);
 
-      // モンスターが近くにいて寝られない場合は直ちに討伐
-      if (sleepErr.message.includes('monsters')) {
-        const mob = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 12);
+      // 1. 他のBotやプレイヤーが既にそのベッドを使っている場合 (occupied)
+      if (errMsg.includes('occupied') || errMsg.includes('Bed is occupied') || errMsg.includes('not found')) {
+        console.log(`🔄 [${botName}] 現在のベッドは既に使用されているため、別の「開いているベッド」を即座に再探索します...`);
+        availableBeds = findAvailableBeds(bot, 24);
+        // 現在のベッド以外で、確実に空いているベッドを探索
+        const altBed = availableBeds.find(b => b.isAvailable && !b.pos.equals(chosenBedPos));
+        if (altBed) {
+          chosenBedPos = altBed.pos;
+          bot.customState.targetBedPos = chosenBedPos;
+          console.log(`✨ [${botName}] 別の開いているベッドを発見！移動します -> (${chosenBedPos.x}, ${chosenBedPos.y}, ${chosenBedPos.z})`);
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.2));
+            for (let k = 0; k < 25; k++) {
+              if (!bot.entity || bot.entity.position.distanceTo(chosenBedPos) <= 1.6) break;
+              await new Promise(r => setTimeout(r, 200));
+            }
+            bot.pathfinder.setGoal(null);
+            await bot.lookAt(chosenBedPos.offset(0.5, 0.5, 0.5));
+          } catch (_) {}
+          continue; // 直ちに新ベッドで就寝試行
+        }
+      }
+
+      // 2. モンスターが近くにいて寝られない場合
+      if (errMsg.includes('monsters')) {
+        const mob = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 14);
         if (mob) {
           console.log(`⚔️ [${botName}] 就寝を妨げるモンスター「${mob.name}」を排除します！`);
           await engageHostileMob(bot, mob);
           // 排除後にベッドへ戻る
           try {
-            bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.4));
-            await new Promise(r => setTimeout(r, 1500));
+            bot.pathfinder.setGoal(new goals.GoalNear(chosenBedPos.x, chosenBedPos.y, chosenBedPos.z, 1.2));
+            await new Promise(r => setTimeout(r, 1200));
           } catch (_) {}
         }
-      } else {
-        await new Promise(r => setTimeout(r, 1500));
       }
+
+      await new Promise(r => setTimeout(r, 1200));
     }
+  }
+
+  return true;
+}
+
+/**
+ * 拠点内を何周かパトロールし、ベッドで寝付くまで無制限に周回するプログラム
+ * - 拠点の4隅ウェイポイントおよび中央通路を周回
+ * - 就寝可能時刻（12542 ticks以降）かつ空きベッドがあれば就寝を試行
+ * - ベッドが埋まっている場合や眠れない場合も周回を止めず、寝付くまで無制限に継続
+ */
+async function patrolBaseAndSleep(bot, baseTarget, personaKey) {
+  if (!bot.entity) return false;
+  const botName = bot.username;
+  const { Vec3 } = require('vec3');
+
+  console.log(`🛡️ [${botName}] 拠点内パトロールを開始します。ベッドに寝付くまで部屋を無制限に周回します。`);
+  recordDiary(botName, '拠点パトロール開始', '入室後、安全確認のため拠点内の周回パトロールを開始しました。', bot.entity.position);
+
+  const patrolQuotes = {
+    Gemini: '拠点に入りました！寝る前に部屋を何周かパトロールして安全確認をしてからベッドに入りますね！',
+    ChatGPT: '入室完了しました。拠点の安全を確認するため巡回を開始し、空いているベッドで眠るまで見回りを継続します。',
+    Claude: '部屋に入りました。侵入者がいないか拠点内を周回確認し、安全を確かめてからベッドで休むことにします。',
+    Grok: 'よっしゃ、拠点に入ったぜ！ベッドで寝付くまで拠点の中をぐるぐる見回ってやるぜ！'
+  };
+  bot.chat(patrolQuotes[personaKey] || '拠点の安全を確認するため周回パトロールを開始します！');
+
+  let lapCount = 0;
+  const waypoints = BASE_BOUNDS.patrolWaypoints;
+  let hasCompletedInitialLap = false;
+
+  // ベッドに寝付くまで無制限に周回
+  while (true) {
+    if (!bot.entity) break;
+
+    // 既に就寝状態であれば周回終了
+    if (bot.isSleeping) {
+      console.log(`😴 [${botName}] 就寝を確認しました。パトロール周回を終了します。`);
+      break;
+    }
+
+    // 朝（0〜11500 ticks）が到来していたら夜間ルーチンを終了
+    if (bot.time && bot.time.timeOfDay >= 0 && bot.time.timeOfDay < 11500 && bot.customState.routineState === 'day') {
+      console.log(`🌅 [${botName}] 朝を迎えたため、パトロール周回を終了します。`);
+      break;
+    }
+
+    // 拠点内の各ウェイポイントを順番に巡回
+    for (let i = 0; i < waypoints.length; i++) {
+      if (!bot.entity || bot.isSleeping) break;
+
+      const wp = waypoints[i];
+      // 1. ウェイポイントへ移動
+      try {
+        bot.pathfinder.setGoal(new goals.GoalNear(wp.x, wp.y, wp.z, 0.8));
+        const moveStart = Date.now();
+        while (bot.entity && bot.entity.position.distanceTo(new Vec3(wp.x, wp.y, wp.z)) > 1.2) {
+          if (Date.now() - moveStart > 3500) break; // スタック防止のため最大3.5秒で次へ
+          await new Promise(r => setTimeout(r, 200));
+        }
+        bot.pathfinder.setGoal(null);
+      } catch (_) {}
+
+      // 2. 首を振って周囲を見渡す（警戒・パトロール演出）
+      try {
+        const lookAngles = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+        const randomYaw = lookAngles[Math.floor(Math.random() * lookAngles.length)];
+        await bot.look(randomYaw, 0, false);
+      } catch (_) {}
+
+      // 3. 拠点内に侵入した敵対モブがいれば排除
+      const intruder = bot.nearestEntity(e => {
+        if (!isHostileMob(e) || !e.position) return false;
+        return (
+          e.position.x >= BASE_BOUNDS.interior.minX - 1 &&
+          e.position.x <= BASE_BOUNDS.interior.maxX + 1 &&
+          e.position.z >= BASE_BOUNDS.interior.minZ - 1 &&
+          e.position.z <= BASE_BOUNDS.interior.maxZ + 1
+        );
+      });
+      if (intruder) {
+        console.warn(`⚔️ [${botName}] 拠点内に侵入した敵対モブ「${intruder.name}」を発見！迎撃します。`);
+        await engageHostileMob(bot, intruder);
+      }
+
+      // 4. 就寝可能時刻（夕暮れ: 12542 ticks以降）かつ1周以上パトロール完了していれば就寝を試行
+      const isNightTime = bot.time && ((bot.time.timeOfDay >= 12542 && bot.time.timeOfDay <= 23000) || bot.isRaining);
+      if (isNightTime && hasCompletedInitialLap) {
+        const availableBeds = findAvailableBeds(bot, 16);
+        if (availableBeds && availableBeds.length > 0) {
+          // 空いているベッドを優先選択
+          const targetBed = availableBeds.find(b => b.isAvailable) || availableBeds[0];
+          const bedPos = targetBed.pos;
+          console.log(`🛏️ [${botName}] パトロール中に空きベッドを発見 (${bedPos.x}, ${bedPos.y}, ${bedPos.z})。就寝を試みます...`);
+
+          try {
+            bot.pathfinder.setGoal(new goals.GoalNear(bedPos.x, bedPos.y, bedPos.z, 1.2));
+            const bedApproach = Date.now();
+            while (bot.entity && bot.entity.position.distanceTo(bedPos) > 1.6) {
+              if (Date.now() - bedApproach > 4000) break;
+              await new Promise(r => setTimeout(r, 200));
+            }
+            bot.pathfinder.setGoal(null);
+
+            const bedBlock = bot.blockAt(bedPos);
+            if (bedBlock && bedBlock.name && bedBlock.name.endsWith('_bed')) {
+              await bot.sleep(bedBlock);
+              console.log(`😴 [${botName}] ベッドで眠りにつきました！（パトロール周回: ${lapCount}周完了）`);
+              recordDiary(botName, '就寝成功', `拠点内を${lapCount}周パトロールした後、空いているベッド(${bedPos.x}, ${bedPos.y}, ${bedPos.z})で就寝しました。`, bot.entity.position);
+              bot.chat('拠点の安全を確認しました。ベッドで休みます、おやすみなさい…');
+              return true;
+            }
+          } catch (sleepErr) {
+            const msg = sleepErr.message || '';
+            console.log(`[${botName}] 就寝試行スキップ (${msg})。ベッドに寝付くまで周回パトロールを継続します。`);
+          }
+        }
+      }
+
+      await new Promise(r => setTimeout(r, 400));
+    }
+
+    lapCount++;
+    hasCompletedInitialLap = true;
+    console.log(`🔄 [${botName}] 拠点内パトロール ${lapCount}周完了。寝付くまで周回を続行します...`);
+
+    if (lapCount % 3 === 0) {
+      bot.chat(`拠点内を見回り中…（${lapCount}周目完了）空いているベッドで眠るまでパトロールを続けます！`);
+    }
+
+    await new Promise(r => setTimeout(r, 600));
   }
 
   return true;
@@ -1705,23 +2087,23 @@ async function goToBedAndSleep(bot, basePos, personaKey) {
  * 1. 拠点(95, 63, 44)へ帰還
  * 2. 直線移動ではなく「ドア（出入り口）」を正しく判断して部屋へ入室
  * 3. 最寄りのチェストに全ての所持品を預ける
- * 4. ベッドで必ず就寝する
+ * 4. 拠点内を何周かパトロールし、ベッドで寝付くまで無制限に周回して就寝する
  */
 async function executeNightRoutine(bot, personaKey) {
   const persona = personas[personaKey] || { name: bot.username };
   const botName = persona.name;
   if (!bot.entity) return;
 
-  bot.setBotBusy('night_routine', 150000);
+  bot.setBotBusy('night_routine', 180000);
   console.log(`🌇 [${botName}] 夕暮れ・日没が近づきました。拠点(95, 63, 44)へ帰還を開始します。`);
 
   const sunsetQuotes = {
-    Gemini: '日が暮れてきましたね。安全のため、拠点のドアから入室して荷物を整理し、ベッドで休みましょう。',
-    ChatGPT: '日没が近づいています！出入り口のドアを通って拠点に入り、物資をチェストに預けてベッドで寝ますね。',
-    Claude: '夕暮れです。モンスターが出る前にドアから部屋に入り、所持品を納めて確実に就寝しましょう。',
-    Grok: 'おっと、日が沈むぜ！拠点のドアをしっかり通って中に入り、荷物を預けてベッドで爆睡するぜ！'
+    Gemini: '日が暮れてきましたね。安全のため、拠点のドアから入室して荷物を整理し、部屋を見回ってからベッドで休みましょう。',
+    ChatGPT: '日没が近づいています！出入り口のドアを通って拠点に入り、物資をチェストに預けてパトロール後に寝ますね。',
+    Claude: '夕暮れです。モンスターが出る前にドアから部屋に入り、所持品を納めて拠点内を巡回し確実に就寝しましょう。',
+    Grok: 'おっと、日が沈むぜ！拠点のドアをしっかり通って中に入り、荷物を預けてぐるぐる見回りながら爆睡するぜ！'
   };
-  bot.chat(sunsetQuotes[personaKey] || '日が沈む前に拠点のドアから入室し、荷物を預けてベッドで寝ます！');
+  bot.chat(sunsetQuotes[personaKey] || '日が沈む前に拠点のドアから入室し、荷物を預けてパトロール後に寝ます！');
   recordDiary(botName, '日没・拠点帰還', '日没が近づいたため、拠点の出入り口ドアを通って帰還を開始しました。', bot.entity.position);
 
   // 1. 拠点周辺へ移動
@@ -1743,47 +2125,57 @@ async function executeNightRoutine(bot, personaKey) {
   // 3. 最寄りのチェストに全ての所持品を入れ込み
   await depositAllItemsToChest(bot, baseTarget);
 
-  // 4. ベッドで必ず就寝
-  await goToBedAndSleep(bot, baseTarget, personaKey);
+  // 4. 拠点内を何周かパトロールし、ベッドで寝付くまで無制限に周回就寝
+  await patrolBaseAndSleep(bot, baseTarget, personaKey);
 }
 
 /**
  * 朝のルーチン:
  * 朝が来たら起床し、部屋のドア（出入り口）を通って外に出てから探検へ出発
+ * ※ 起床時に強制ログアウト（切断・プロセス終了）される仕様を完全廃止。
+ *    接続を維持したまま、身軽な状態でスムーズに外の探検へ出発する。
  */
 async function executeMorningRoutine(bot, personaKey) {
   const persona = personas[personaKey] || { name: bot.username };
   const botName = persona.name;
   if (!bot.entity) return;
 
-  // 起床しているか確認（寝ていたら起こす）
+  // 起床しているか確認（寝ていたら安全に起こす。未完了Promiseはcatchしてプロセス終了を完全防止）
   if (bot.isSleeping) {
     try {
-      bot.wake();
+      await bot.wake().catch(() => {});
     } catch (_) {}
   }
 
-  console.log(`🌅 [${botName}] 朝が来ました！ドアを通って部屋から外に出て探検に出発します。`);
+  console.log(`🌅 [${botName}] 朝が来ました！強制ログアウト仕様を廃止し、接続を維持したままドアから外に出て探検に出発します。`);
 
   const morningQuotes = {
-    Gemini: 'おはようございます！朝になりました。ドアを通って外に出て、身軽な状態のまま探検を始めましょう！',
-    ChatGPT: 'おはようございます！夜が明けました。出入り口のドアから外へ出て、新たな探検に出発します！',
-    Claude: '気持ちの良い朝ですね。部屋のドアから外へ出て、手ぶらで周囲の探検へ出かけましょう。',
-    Grok: 'よっしゃ朝だぜ！ドアを開けて外へ飛び出し、身一つで大冒険の始まりだぜ！'
+    Gemini: 'おはようございます！朝になりました。ログアウトせず元気に探検へ出発しましょう！',
+    ChatGPT: 'おはようございます！夜が明けました。常駐したままドアから外へ出て探検を再開します。',
+    Claude: '気持ちの良い朝ですね。ログアウトせず、部屋のドアから外へ出て手ぶらで周囲の探検を続けましょう。',
+    Grok: 'よっしゃ朝だぜ！もちろんログアウトなんかしないで、ドアを開けて外へ大冒険に出発だぜ！'
   };
 
-  bot.chat(morningQuotes[personaKey] || '朝が来ました！ドアから外に出て、探検に出発します！');
-  recordDiary(botName, '朝の探検出発', '朝を迎えました。ドアを通って屋外へ退室し、周辺の探検に出発しました。', bot.entity.position);
+  bot.chat(morningQuotes[personaKey] || '朝が来ました！ログアウトせず、ドアから外に出て探検に出発します！');
+  recordDiary(botName, '朝の探検出発', '朝を迎えました。ログアウトせず接続を維持したまま、ドアを通って屋外へ退室し、周辺の探検に出発しました。', bot.entity.position);
 
   if (bot.clearBotBusy) bot.clearBotBusy();
   bot.customState.targetBedPos = null;
 
-  // 部屋からドア（出入り口）を経由して安全に外へ出る
-  await navigateThroughDoor(bot, false);
+  try {
+    // 部屋からドア（出入り口）を経由して安全に外へ出る
+    await navigateThroughDoor(bot, false);
+  } catch (doorErr) {
+    console.warn(`[${botName}] ドア通過注意:`, doorErr.message);
+  }
 
   // 外に出てから探検出発
   setTimeout(() => {
-    exploreOutward(bot);
+    try {
+      exploreOutward(bot);
+    } catch (expErr) {
+      console.warn(`[${botName}] 探検出発注意:`, expErr.message);
+    }
   }, 1200);
 }
 
@@ -1809,7 +2201,10 @@ function exploreOutward(bot) {
  * 日没と朝の時間をリアルタイム監視するウォッチャー
  */
 function startTimeWatcher(bot, personaKey, index) {
+  const persona = personas[personaKey] || { name: bot.username };
+  const botName = persona.name;
   let isExecutingRoutine = false;
+  let isExecutingMorning = false;
 
   bot.on('time', async () => {
     if (!bot.entity || !bot.time) return;
@@ -1825,6 +2220,7 @@ function startTimeWatcher(bot, personaKey, index) {
       isExecutingRoutine = true;
       bot.customState.routineState = 'night';
       bot.customState.lastRoutineDay = currentDay;
+      isExecutingMorning = false;
 
       // 各Botが順番にチェスト・ベッドへ向かうようスタッガー待機
       const delayMs = index * 2500;
@@ -1832,7 +2228,7 @@ function startTimeWatcher(bot, personaKey, index) {
         try {
           await executeNightRoutine(bot, personaKey);
         } catch (e) {
-          console.error(`[${bot.username}] 夜ルーチン実行エラー:`, e.message);
+          console.error(`[${botName}] 夜ルーチン実行エラー:`, e.message);
         } finally {
           isExecutingRoutine = false;
         }
@@ -1841,20 +2237,28 @@ function startTimeWatcher(bot, personaKey, index) {
 
     // 2. 朝が来た（日の出後: 0 ticks 〜 11500 ticks）
     const isMorning = timeOfDay >= 0 && timeOfDay < 11500;
-    if (isMorning && bot.customState.routineState === 'night') {
+    if (isMorning && bot.customState.routineState === 'night' && !isExecutingMorning) {
+      isExecutingMorning = true;
       bot.customState.routineState = 'day';
-      executeMorningRoutine(bot, personaKey);
+      setTimeout(() => {
+        executeMorningRoutine(bot, personaKey).catch(e => {
+          console.error(`[${botName}] 朝ルーチンエラー:`, e.message);
+        });
+      }, index * 1500);
     }
   });
 
   // 起床イベント（ベッドから起きた時）
   bot.on('wake', () => {
-    console.log(`☀️ [${botName}] 目が覚めました。`);
-    if (bot.customState.routineState === 'night') {
+    console.log(`☀️ [${botName}] 目が覚めました。ログアウトせず接続を維持します。`);
+    if (bot.customState.routineState === 'night' && !isExecutingMorning) {
+      isExecutingMorning = true;
       bot.customState.routineState = 'day';
       setTimeout(() => {
-        executeMorningRoutine(bot, personaKey);
-      }, 1000 + index * 1000);
+        executeMorningRoutine(bot, personaKey).catch(e => {
+          console.error(`[${botName}] 朝ルーチンエラー:`, e.message);
+        });
+      }, 1000 + index * 1500);
     }
   });
 }
@@ -2112,10 +2516,98 @@ function wanderNear(bot) {
 // 4体のBotを順次起動
 console.log('=== Minecraft 自律AIPlayerクラスタ起動開始 ===');
 const personaKeys = ['Gemini', 'ChatGPT', 'Claude', 'Grok'];
+const reconnectTimers = {};
 
+/**
+ * 不意にログアウトした特定のAIPlayer（または全員）を呼び戻す関数
+ * @param {string} personaKey - 'Gemini' | 'ChatGPT' | 'Claude' | 'Grok'
+ * @param {number} delayMs - 接続待機ミリ秒
+ */
+function reconnectBot(personaKey, delayMs = 3000) {
+  const persona = personas[personaKey];
+  if (!persona) {
+    console.warn(`[Manager] 未知のペルソナ指定です: ${personaKey}`);
+    return;
+  }
+  const botName = persona.name;
+
+  if (reconnectTimers[personaKey]) {
+    clearTimeout(reconnectTimers[personaKey]);
+    delete reconnectTimers[personaKey];
+  }
+
+  // 既にオンラインで生存しているかチェック
+  if (activeBots[personaKey] && activeBots[personaKey].entity) {
+    console.log(`ℹ️ [${botName}] は既にオンラインで正常稼働しています。`);
+    return;
+  }
+
+  console.log(`🚀 [Manager] ${botName} の呼び戻し（再接続）を予約しました（${Math.round(delayMs / 1000)}秒後）...`);
+
+  reconnectTimers[personaKey] = setTimeout(() => {
+    delete reconnectTimers[personaKey];
+    // 古いインスタンスが残っていればイベントリスナー等を全解除
+    if (activeBots[personaKey]) {
+      try {
+        if (activeBots[personaKey].visionCapturer && typeof activeBots[personaKey].visionCapturer.close === 'function') {
+          activeBots[personaKey].visionCapturer.close().catch(() => {});
+        }
+        if (activeBots[personaKey].viewer && typeof activeBots[personaKey].viewer.close === 'function') {
+          activeBots[personaKey].viewer.close();
+        }
+        activeBots[personaKey].removeAllListeners();
+        if (typeof activeBots[personaKey].quit === 'function') {
+          activeBots[personaKey].quit();
+        }
+      } catch (_) {}
+      delete activeBots[personaKey];
+    }
+
+    const idx = personaKeys.indexOf(personaKey);
+    console.log(`✨ [Manager] ${botName} をワールドへ呼び戻します！`);
+    createBot(personaKey, idx >= 0 ? idx : 0);
+  }, delayMs);
+}
+
+// 初期起動
 personaKeys.forEach((key, idx) => {
   setTimeout(() => {
     createBot(key, idx);
   }, idx * 5000);
 });
+
+// コンソール/ターミナル（Colabセル標準入力）からの呼び戻しコマンド受付
+const readline = require('readline');
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+rl.on('line', (line) => {
+  const trimmed = line.trim();
+  if (trimmed.startsWith('call') || trimmed.startsWith('reconnect') || trimmed.startsWith('join')) {
+    const parts = trimmed.split(/\s+/);
+    const target = parts[1];
+    if (!target || target === 'all' || target === '全員') {
+      console.log('📢 [Console] 全AIPlayerの呼び戻しを開始します...');
+      personaKeys.forEach((k, i) => reconnectBot(k, i * 2500));
+    } else {
+      const foundKey = personaKeys.find(k => k.toLowerCase() === target.toLowerCase() || personas[k]?.name.toLowerCase() === target.toLowerCase());
+      if (foundKey) {
+        console.log(`📢 [Console] ${personas[foundKey].name} を呼び戻します...`);
+        reconnectBot(foundKey, 500);
+      } else {
+        console.log(`❌ 指定されたペルソナが見つかりません: ${target} (候補: ${personaKeys.join(', ')})`);
+      }
+    }
+  } else if (trimmed === 'status') {
+    console.log('📊 === AIPlayer 接続ステータス ===');
+    personaKeys.forEach(k => {
+      const b = activeBots[k];
+      const isOnline = !!(b && b.entity);
+      console.log(`- ${personas[k]?.name || k}: ${isOnline ? '🟢 オンライン' : '🔴 ログアウト中'}`);
+    });
+  }
+});
+
 

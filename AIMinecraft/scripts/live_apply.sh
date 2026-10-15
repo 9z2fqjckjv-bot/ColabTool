@@ -86,6 +86,12 @@ else
     echo "✅ Minecraftサーバー起動完了！"
 fi
 
+# 拠点の安全確保: モブ攻撃・クリーパー爆発・ゾンビドア破壊による拠点チェスト・ベッド・家具破壊を完全無効化
+if [ -p "$PIPE_PATH" ]; then
+    echo "gamerule mobGriefing false" > "$PIPE_PATH" 2>/dev/null || true
+    echo "🛡️ gamerule mobGriefing false を設定し、モブによる拠点ブロック破壊を無効化しました。"
+fi
+
 # 4. LLMエンジンの起動確認 & 高速モデル準備
 echo ">> [3/6] LLM推論エンジンの稼働確認..."
 if [ -z "$GEMINI_API_KEY" ]; then
@@ -118,9 +124,21 @@ echo "✅ AIPlayerクラスタ (3秒視覚スクショ + 知識RAG + 自動行�
 
 # 6. 4分割一人称視点 (POV) 画面収録システムの再起動
 echo ">> [5/6] 4分割画面視線収録 (POV) システムの最新反映・再起動..."
+# openbox と Google Chrome の確認
+if ! command -v openbox > /dev/null 2>&1; then
+    apt-get install -y -qq openbox > /dev/null 2>&1 || true
+fi
+if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
+    echo "画面収録用ブラウザ (Google Chrome 安定版) をセットアップ中..."
+    wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb 2>/dev/null
+    apt-get install -y -qq /tmp/google-chrome.deb > /dev/null 2>&1 || apt-get install -y -f -qq > /dev/null 2>&1
+    rm -f /tmp/google-chrome.deb
+fi
+
 pkill -f "ffmpeg -y -f x11grab" || true
 pkill -f "multiview.html" || true
 pkill -f "http.server 8088" || true
+pkill -f "openbox" || true
 pkill -f "Xvfb :99" || true
 sleep 1
 

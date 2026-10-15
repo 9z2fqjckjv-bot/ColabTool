@@ -14,14 +14,20 @@ echo "=== [1/4] 既存の録画・ディスプレイ関連プロセスのクリ�
 pkill -f "ffmpeg -y -f x11grab" || true
 pkill -f "multiview.html" || true
 pkill -f "http.server 8088" || true
+pkill -f "openbox" || true
 pkill -f "Xvfb :99" || true
 sleep 1
 
-echo "=== [2/4] 仮想ディスプレイ (Xvfb :99, 1920x1080) 起動 ==="
+echo "=== [2/4] 仮想ディスプレイ (Xvfb :99, 1920x1080) & ウィンドウマネージャ起動 ==="
 export DISPLAY=:99
-Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render -noreset > /dev/null 2>&1 &
+Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +extension RENDER +extension COMPOSITE -noreset > /dev/null 2>&1 &
 XVFB_PID=$!
 sleep 2
+
+# openbox が利用可能な場合は起動 (ウィンドウの全画面マッピング・フォーカスを保証)
+if command -v openbox > /dev/null 2>&1; then
+    openbox > /dev/null 2>&1 &
+fi
 
 # ローカルHTTPサーバーを起動して multiview.html を安全に配信 (Private Network Access 制約の回避)
 cd "$SCRIPT_DIR"
@@ -41,16 +47,22 @@ elif which chromium > /dev/null 2>&1; then
     BROWSER="chromium"
 else
     # Puppeteerダウンロード済みChromeバイナリの探索
-    PUPPETEER_CHROME=$(find /root/.cache/puppeteer -type f -name chrome 2>/dev/null | head -n 1 || true)
+    PUPPETEER_CHROME=$(find /root/.cache/puppeteer /root/.cache -type f -name chrome 2>/dev/null | head -n 1 || true)
     if [ -n "$PUPPETEER_CHROME" ] && [ -x "$PUPPETEER_CHROME" ]; then
         BROWSER="$PUPPETEER_CHROME"
     fi
 fi
 
 if [ -z "$BROWSER" ]; then
-    echo "⚠️ ブラウザが見つからないため、chromium-browser のインストールを試行します..."
-    apt-get update -qq && apt-get install -y -qq chromium-browser > /dev/null 2>&1 || true
-    BROWSER="chromium-browser"
+    echo "⚠️ ブラウザが見つからないため、Google Chrome 安定版をダウンロード・セットアップします..."
+    wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb 2>/dev/null
+    apt-get install -y -qq /tmp/google-chrome.deb > /dev/null 2>&1 || apt-get install -y -f -qq > /dev/null 2>&1
+    rm -f /tmp/google-chrome.deb
+    if which google-chrome > /dev/null 2>&1; then
+        BROWSER="google-chrome"
+    elif which google-chrome-stable > /dev/null 2>&1; then
+        BROWSER="google-chrome-stable"
+    fi
 fi
 
 echo "使用ブラウザ: $BROWSER"
@@ -60,18 +72,32 @@ TARGET_URL="http://127.0.0.1:8088/multiview.html"
 rm -rf /tmp/rec_chrome_profile
 mkdir -p /tmp/rec_chrome_profile
 
+# WebGL (Three.js) を描画可能にするため SwiftShader / ANGLE を指定し、バックグラウンド抑制を無効化
 $BROWSER \
     --no-sandbox \
     --disable-setuid-sandbox \
     --disable-dev-shm-usage \
-    --disable-gpu \
+    --enable-webgl \
+    --ignore-gpu-blocklist \
+    --use-gl=angle \
+    --use-angle=swiftshader \
+    --enable-unsafe-swiftshader \
     --window-size=1920,1080 \
     --window-position=0,0 \
     --start-fullscreen \
     --kiosk \
+    --force-device-scale-factor=1 \
     --autoplay-policy=no-user-gesture-required \
     --disable-web-security \
     --allow-running-insecure-content \
+    --disable-background-timer-throttling \
+    --disable-backgrounding-occluded-windows \
+    --disable-renderer-backgrounding \
+    --no-first-run \
+    --no-default-browser-check \
+    --disable-extensions \
+    --disable-infobars \
+    --disable-session-crashed-bubble \
     --user-data-dir=/tmp/rec_chrome_profile \
     "$TARGET_URL" > /content/recordings/browser.log 2>&1 &
 BROWSER_PID=$!

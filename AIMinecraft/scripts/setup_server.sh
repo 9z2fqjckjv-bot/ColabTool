@@ -11,12 +11,14 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== [1/4] Java 21 JDK および必要パッケージのセットアップ ==="
 apt-get update -qq
-apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils zstd nodejs npm rsync build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev > /dev/null 2>&1
+apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils openbox wget zstd nodejs npm rsync build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev > /dev/null 2>&1
 
-# 画面収録用ブラウザの確認・インストール
-if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1 && ! which chromium-browser > /dev/null 2>&1 && ! which chromium > /dev/null 2>&1; then
-    echo "画面収録用ブラウザをインストール中..."
-    apt-get install -y -qq chromium-browser > /dev/null 2>&1 || true
+# 画面収録用ブラウザ (Google Chrome 安定版) の確認・インストール
+if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
+    echo "画面収録用ブラウザ (Google Chrome 安定版) をダウンロード・セットアップ中..."
+    wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+    apt-get install -y -qq /tmp/google-chrome.deb > /dev/null 2>&1 || apt-get install -y -f -qq > /dev/null 2>&1
+    rm -f /tmp/google-chrome.deb
 fi
 
 echo "Javaバージョン:"
