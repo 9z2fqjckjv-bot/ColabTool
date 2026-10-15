@@ -167,6 +167,27 @@ function isBaseProtectedBlock(block) {
   return isInBaseArea || isImportantEquipment;
 }
 
+// 全AI共通の玄関ドア排他制御（1体ずつ順番に衝突せず整然と通過するためのミューテックス）
+let baseDoorOccupiedBy = null;
+let baseDoorOccupiedUntil = 0;
+
+function acquireBaseDoorLock(botName, timeoutMs = 8000) {
+  const now = Date.now();
+  if (baseDoorOccupiedBy && baseDoorOccupiedBy !== botName && now < baseDoorOccupiedUntil) {
+    return false; // 他のBotが通過中のため待機
+  }
+  baseDoorOccupiedBy = botName;
+  baseDoorOccupiedUntil = now + timeoutMs;
+  return true;
+}
+
+function releaseBaseDoorLock(botName) {
+  if (baseDoorOccupiedBy === botName) {
+    baseDoorOccupiedBy = null;
+    baseDoorOccupiedUntil = 0;
+  }
+}
+
 /**
  * 拠点のドア（出入り口）を探索し、出入り口ペア（ドア位置、外側座標、内側座標）を返す
  * 指定座標 (94, 63, 39) を最優先玄関として確実に解決
@@ -183,9 +204,9 @@ function findBaseDoors(bot, basePos) {
 
   for (const dpos of designatedDoors) {
     const block = bot.blockAt(dpos);
-    // 北向き(Facing north / negative Z)が屋外、南向き(positive Z)が拠点内
-    const outsidePos = new Vec3(dpos.x + 0.5, dpos.y, dpos.z - 2.0); // Z < 39 (屋外・水辺側)
-    const insidePos  = new Vec3(dpos.x + 0.5, dpos.y, dpos.z + 2.5); // Z > 39 (拠点内部側)
+    // 北向き(Facing north / negative Z)が屋外水辺側(Y=62)、南向き(positive Z)が拠点内部(Y=63)
+    const outsidePos = new Vec3(dpos.x + 0.5, 62.0, dpos.z - 2.0); // Z < 39 (屋外・水辺足場側)
+    const insidePos  = new Vec3(dpos.x + 0.5, 63.0, dpos.z + 2.2); // Z > 39 (拠点内部側)
     doorList.push({
       block: block || { position: dpos, name: 'oak_door' },
       pos: dpos,
@@ -210,14 +231,12 @@ function findBaseDoors(bot, basePos) {
       const props = (typeof block.getProperties === 'function') ? block.getProperties() : (block._properties || {});
       if (props.half === 'upper') continue;
 
-      // 北側(Z < pos.z)が屋外、南側(Z > pos.z)が拠点内
       const outsidePos = new Vec3(pos.x + 0.5, pos.y, pos.z - 1.8);
       const insidePos  = new Vec3(pos.x + 0.5, pos.y, pos.z + 1.8);
       doorList.push({ block, pos, outsidePos, insidePos, isDesignated: false });
     }
   } catch (_) {}
 
-  // 指定ドアを先頭にして距離順でソート
   doorList.sort((a, b) => {
     if (a.isDesignated && !b.isDesignated) return -1;
     if (!a.isDesignated && b.isDesignated) return 1;
@@ -231,18 +250,20 @@ function findBaseDoors(bot, basePos) {
  * 出入り口（ドア）を経由して安全に部屋に入室または退室する
  * enter === true: 屋外 (Z < 39) -> ドアを開けて通過 -> 拠点内 (Z >= 39)
  * enter === false: 拠点内 (Z >= 39) -> ドアを開けて通過 -> 屋外 (Z < 39)
+ * ※ 排他制御とダイレクト前進制御により、開閉の無限ループと足踏みを完全防止
  */
 async function navigateThroughDoor(bot, enter = true) {
   if (!bot.entity) return false;
   const botName = bot.username;
   const currentPos = bot.entity.position;
+  const { Vec3 } = require('vec3');
 
   // 既に目的の側にいる場合はスキップ
   if (enter && currentPos.z >= 41.0) {
     console.log(`ℹ️ [${botName}] 既に拠点内(Z=${Math.round(currentPos.z)})にいるためドア通過をスキップします。`);
     return true;
   }
-  if (!enter && currentPos.z <= 37.5) {
+  if (!enter && currentPos.z <= 37.8) {
     console.log(`ℹ️ [${botName}] 既に屋外(Z=${Math.round(currentPos.z)})にいるためドア通過をスキップします。`);
     return true;
   }
@@ -252,25 +273,39 @@ async function navigateThroughDoor(bot, enter = true) {
   if (doors.length === 0) return false;
 
   const targetDoor = doors[0];
-  const startWaypoint = enter ? targetDoor.outsidePos : targetDoor.insidePos;
-  const endWaypoint = enter ? targetDoor.insidePos : targetDoor.outsidePos;
+  const doorPos = targetDoor.pos; // (94, 63, 39)
+
+  // 1. 他のBotがドア通過中なら順番待ち（1体ずつ安全に通過）
+  bot.customState.isNavigatingDoor = true;
+  const waitStart = Date.now();
+  while (!acquireBaseDoorLock(botName, 9000)) {
+    if (Date.now() - waitStart > 12000) {
+      acquireBaseDoorLock(botName, 7000);
+      break;
+    }
+    await new Promise(r => setTimeout(r, 500));
+  }
 
   try {
-    console.log(`🚪 [${botName}] 拠点の出入り口ドア(X:${targetDoor.pos.x}, Y:${targetDoor.pos.y}, Z:${targetDoor.pos.z})経由で${enter ? '拠点へ入室' : '屋外へ退室'}します...`);
+    console.log(`🚪 [${botName}] 拠点の出入り口ドア(X:${doorPos.x}, Y:${doorPos.y}, Z:${doorPos.z})経由で${enter ? '拠点へ入室' : '屋外へ退室'}を開始します...`);
 
-    // 1. まずドア手前のウェイポイントへ移動
-    bot.pathfinder.setGoal(new goals.GoalNear(startWaypoint.x, startWaypoint.y, startWaypoint.z, 0.9));
+    // 2. ドア手前の待機位置へ移動
+    const prePos = enter
+      ? new Vec3(doorPos.x + 0.5, 62.0, doorPos.z - 1.8)
+      : new Vec3(doorPos.x + 0.5, 63.0, doorPos.z + 1.8);
+
+    bot.pathfinder.setGoal(new goals.GoalNear(prePos.x, prePos.y, prePos.z, 0.9));
     const startApproach = Date.now();
-    while (bot.entity && bot.entity.position.distanceTo(startWaypoint) > 1.3) {
-      if (Date.now() - startApproach > 14000) break;
+    while (bot.entity && bot.entity.position.distanceTo(prePos) > 1.3) {
+      if (Date.now() - startApproach > 7000) break;
       await new Promise(r => setTimeout(r, 200));
     }
+    bot.pathfinder.setGoal(null);
 
-    // 2. ドアの開閉状態を確認し、閉じている場合は開ける
-    let doorBlock = bot.blockAt(targetDoor.pos);
+    // 3. ドアの開閉状態を確認し、閉まっている場合は確実に1回だけ開ける
+    let doorBlock = bot.blockAt(doorPos);
     if (!doorBlock || !isDoorOrGate(doorBlock)) {
-      // 隣のドア (95 63 39) もチェック
-      const altPos = targetDoor.pos.offset(1, 0, 0);
+      const altPos = doorPos.offset(1, 0, 0);
       const altBlock = bot.blockAt(altPos);
       if (altBlock && isDoorOrGate(altBlock)) {
         doorBlock = altBlock;
@@ -286,29 +321,67 @@ async function navigateThroughDoor(bot, enter = true) {
       }
     }
 
-    // 3. ドアを通過して反対側のウェイポイントへ移動
-    bot.pathfinder.setGoal(new goals.GoalNear(endWaypoint.x, endWaypoint.y, endWaypoint.z, 0.7));
-    const passApproach = Date.now();
-    while (bot.entity && bot.entity.position.distanceTo(endWaypoint) > 1.2) {
-      if (Date.now() - passApproach > 10000) break;
-      await new Promise(r => setTimeout(r, 200));
+    // 4. ドアの開口部を直進して確実に通り抜ける
+    // enter: Z=41.5 (屋内), !enter: Z=36.8 (屋外水辺側)
+    const targetZ = enter ? (doorPos.z + 2.5) : (doorPos.z - 2.2);
+    const passTarget = new Vec3(doorPos.x + 0.5, enter ? 63.0 : 62.0, targetZ);
+
+    // 照準を進行方向に向け、前進制御で引っかからずに通り抜ける
+    await bot.lookAt(new Vec3(passTarget.x, bot.entity.position.y + 1.6, passTarget.z));
+    bot.pathfinder.setGoal(new goals.GoalXZ(passTarget.x, passTarget.z));
+    bot.setControlState('forward', true);
+    if (!enter) bot.setControlState('sprint', true);
+
+    const passStart = Date.now();
+    let crossed = false;
+    while (Date.now() - passStart < 6000) {
+      if (!bot.entity) break;
+      const currentZ = bot.entity.position.z;
+      if (enter && currentZ >= 40.2) {
+        crossed = true;
+        break;
+      }
+      if (!enter && currentZ <= 38.0) {
+        crossed = true;
+        break;
+      }
+      await new Promise(r => setTimeout(r, 150));
     }
 
-    // 4. 通過後にドアを振り返って閉める（防犯・モンスター侵入完全遮断）
-    if (doorBlock && isDoorOrGate(doorBlock)) {
-      const refreshedDoor = bot.blockAt(doorBlock.position);
-      if (refreshedDoor && isBlockOpen(refreshedDoor)) {
-        await bot.lookAt(doorBlock.position.offset(0.5, 0.5, 0.5));
-        await bot.activateBlock(refreshedDoor);
-        console.log(`🚪 [${botName}] 通過後にドアをしっかり閉めました（防犯戸締まり完了）。`);
+    bot.setControlState('forward', false);
+    bot.setControlState('sprint', false);
+    bot.pathfinder.setGoal(null);
+
+    // 5. 完全に通り抜けた場合のみ、ドア付近に他のBotやプレイヤーがいないか確認して戸締まり
+    if (crossed && doorBlock && isDoorOrGate(doorBlock)) {
+      await new Promise(r => setTimeout(r, 300));
+      const isAnyoneInDoorway = Object.values(bot.entities || {}).some(e => {
+        if (!e || e === bot.entity || !e.position) return false;
+        return (e.type === 'player' || e.type === 'mob') && e.position.distanceTo(doorPos) < 1.8;
+      });
+
+      if (!isAnyoneInDoorway) {
+        const refreshedDoor = bot.blockAt(doorBlock.position);
+        if (refreshedDoor && isBlockOpen(refreshedDoor)) {
+          await bot.lookAt(doorBlock.position.offset(0.5, 0.5, 0.5));
+          await bot.activateBlock(refreshedDoor);
+          console.log(`🚪 [${botName}] ドア通過完了後、後ろを振り返ってドアをしっかり閉めました。`);
+        }
+      } else {
+        console.log(`🚪 [${botName}] 後続のプレイヤー/Botがドア付近にいるため、ドアを開けたまま譲りました。`);
       }
     }
 
-    recordDiary(botName, enter ? '拠点入室' : '拠点退室', `拠点ドア(94, 63, 39)を開けて${enter ? '入室' : '退室'}し、通過後に戸締まりしました。`, bot.entity.position);
+    recordDiary(botName, enter ? '拠点入室' : '拠点退室', `拠点ドア(94, 63, 39)を通って${enter ? '入室' : '退室'}しました。`, bot.entity.position);
     return true;
   } catch (err) {
     console.warn(`[${botName}] ドア通過ナビゲーション注意:`, err.message);
     return false;
+  } finally {
+    bot.setControlState('forward', false);
+    bot.setControlState('sprint', false);
+    bot.customState.isNavigatingDoor = false;
+    releaseBaseDoorLock(botName);
   }
 }
 
@@ -548,6 +621,7 @@ function startSafetyWatchdog(bot) {
  * 村人と同様のドア・柵（フェンスゲート）・トラップドア自動開閉ループ
  * 1. 進行方向の閉じたドア/ゲートに近づいた際、右クリックで開けて通り抜ける
  * 2. 通過後、振り返って必ずドア/ゲートを閉める（モンスター侵入防止・村人アクション）
+ * ※ ベクトル内積による「実際の通過判定」とクールダウンにより、開閉の無限ループ・足止めを完全防止
  */
 function startVillagerDoorLoop(bot) {
   const openedDoors = new Map(); // posKey -> { block, openedAt, botPosAtOpen }
@@ -555,16 +629,17 @@ function startVillagerDoorLoop(bot) {
   let isToggling = false;
 
   setInterval(async () => {
-    if (!bot.entity || bot.isSleeping || isToggling) return;
+    // ドア通過専用ルーチン実行中、就寝中、またはトグル処理中はスキップ
+    if (!bot.entity || bot.isSleeping || isToggling || bot.customState?.isNavigatingDoor) return;
     const botPos = bot.entity.position;
     const now = Date.now();
 
-    // 1. 通過後のドア・フェンスゲートを閉める（村人の最重要行動）
+    // 1. 通過後のドア・フェンスゲートを閉める（村人アクション）
     for (const [posKey, info] of openedDoors.entries()) {
       const doorPos = info.block.position;
       const currentBlock = bot.blockAt(doorPos);
 
-      // ブロックが破壊されたか別のブロックになった場合
+      // ブロックが消失・別ブロック化した場合
       if (!currentBlock || !isDoorOrGate(currentBlock)) {
         openedDoors.delete(posKey);
         continue;
@@ -573,21 +648,35 @@ function startVillagerDoorLoop(bot) {
       const dist = botPos.distanceTo(doorPos);
       const timeSinceOpen = now - info.openedAt;
 
-      // ドアがまだ開いていて、Botが通り抜けて少し離れた（1.3m〜3.2m以内）かつ400ms以上経過
+      // 8秒以上経過した場合は古い追跡を自然破棄（閉めずに解除）
+      if (timeSinceOpen > 8000) {
+        openedDoors.delete(posKey);
+        continue;
+      }
+
+      // ドアがまだ開いている場合
       if (isBlockOpen(currentBlock)) {
-        if (timeSinceOpen > 400 && dist >= 1.3 && dist <= 3.2) {
-          // 周囲1.2m以内に他のBotやプレイヤーがいないか確認（挟み込み防止）
-          const isAnotherPlayerClose = Object.values(bot.entities).some(e => {
-            if (!e || e === bot.entity) return false;
-            return (e.type === 'player' || e.type === 'mob') && e.position.distanceTo(doorPos) < 1.2;
+        // 重要: 実際にドアの反対側へ通り抜けたかを判定（開口面ベクトルの符号反転判定）
+        const initDiff = info.botPosAtOpen.minus(doorPos);
+        const currDiff = botPos.minus(doorPos);
+        const dotProduct = (initDiff.x * currDiff.x + initDiff.z * currDiff.z);
+
+        // 内積がマイナス（＝開けた時と反対側の空間に移動した）かつ、距離が1.5m以上離れた場合のみ「通過完了」
+        const hasPassedThrough = dotProduct < -0.3;
+
+        if (hasPassedThrough && dist >= 1.5 && dist <= 3.5 && timeSinceOpen > 1500) {
+          // ドアの周囲1.8m以内に他のプレイヤーやモブがいないことを確認（挟み込み防止）
+          const isAnyoneClose = Object.values(bot.entities || {}).some(e => {
+            if (!e || e === bot.entity || !e.position) return false;
+            return (e.type === 'player' || e.type === 'mob') && e.position.distanceTo(doorPos) < 1.8;
           });
 
-          if (!isAnotherPlayerClose) {
+          if (!isAnyoneClose) {
             isToggling = true;
             try {
               await bot.lookAt(doorPos.offset(0.5, 0.5, 0.5));
               await bot.activateBlock(currentBlock);
-              doorCooldowns.set(posKey, now);
+              doorCooldowns.set(posKey, now + 3000); // 3秒クールダウン
               openedDoors.delete(posKey);
               console.log(`🚪 [${bot.username}] 通過後に${currentBlock.name}を閉めました（村人アクション）。`);
               recordDiary(bot.username, '村人ドア閉め', `通過後に${currentBlock.name}を閉めました。`, botPos);
@@ -600,54 +689,48 @@ function startVillagerDoorLoop(bot) {
         // すでに誰かが閉めた場合
         openedDoors.delete(posKey);
       }
-
-      // 10秒以上経過した古い追跡は削除
-      if (timeSinceOpen > 10000) {
-        openedDoors.delete(posKey);
-      }
     }
 
     // 2. 進行方向の閉じたドア・フェンスゲートを開ける
-    // 周囲2.5m以内の閉じたドア・ゲートを探索
-    const nearbyDoorPos = bot.findBlocks({
-      matching: block => {
-        if (!isDoorOrGate(block)) return false;
-        return !isBlockOpen(block);
-      },
-      maxDistance: 2.6,
-      count: 3
-    });
+    // 実際に歩行移動中（pathfinder動作中）の場合のみ開くアシストを行う（立ち止まっている時は開閉しない）
+    if (bot.pathfinder && bot.pathfinder.isMoving()) {
+      const nearbyDoorPos = bot.findBlocks({
+        matching: block => isDoorOrGate(block) && !isBlockOpen(block),
+        maxDistance: 2.2,
+        count: 2
+      });
 
-    if (nearbyDoorPos.length > 0) {
-      for (const pos of nearbyDoorPos) {
-        const posKey = `${pos.x},${pos.y},${pos.z}`;
-        const lastToggle = doorCooldowns.get(posKey) || 0;
-        if (now - lastToggle < 800) continue; // 連続操作防止
+      if (nearbyDoorPos.length > 0) {
+        for (const pos of nearbyDoorPos) {
+          const posKey = `${pos.x},${pos.y},${pos.z}`;
+          const cooldownUntil = doorCooldowns.get(posKey) || 0;
+          if (now < cooldownUntil) continue; // クールダウン中はスキップ
 
-        const doorBlock = bot.blockAt(pos);
-        if (!doorBlock || isBlockOpen(doorBlock)) continue;
+          const doorBlock = bot.blockAt(pos);
+          if (!doorBlock || isBlockOpen(doorBlock)) continue;
 
-        const dist = botPos.distanceTo(pos);
-        if (dist <= 2.4) {
-          isToggling = true;
-          try {
-            await bot.lookAt(pos.offset(0.5, 0.5, 0.5));
-            await bot.activateBlock(doorBlock);
-            doorCooldowns.set(posKey, now);
-            openedDoors.set(posKey, {
-              block: doorBlock,
-              openedAt: now,
-              botPosAtOpen: botPos.clone()
-            });
-            console.log(`🚪 [${bot.username}] 前方の${doorBlock.name}を開けました。`);
-            recordDiary(bot.username, '村人ドア開け', `前方の${doorBlock.name}を開けて通り抜けます。`, botPos);
-          } catch (_) {}
-          isToggling = false;
-          break;
+          const dist = botPos.distanceTo(pos);
+          if (dist <= 2.2 && dist >= 0.8) {
+            isToggling = true;
+            try {
+              await bot.lookAt(pos.offset(0.5, 0.5, 0.5));
+              await bot.activateBlock(doorBlock);
+              doorCooldowns.set(posKey, now + 2500); // 2.5秒クールダウン
+              openedDoors.set(posKey, {
+                block: doorBlock,
+                openedAt: now,
+                botPosAtOpen: botPos.clone()
+              });
+              console.log(`🚪 [${bot.username}] 前方の${doorBlock.name}を開けました。`);
+              recordDiary(bot.username, '村人ドア開け', `前方の${doorBlock.name}を開けて通り抜けます。`, botPos);
+            } catch (_) {}
+            isToggling = false;
+            break;
+          }
         }
       }
     }
-  }, 250);
+  }, 350);
 }
 
 /**
@@ -2240,11 +2323,12 @@ function startTimeWatcher(bot, personaKey, index) {
     if (isMorning && bot.customState.routineState === 'night' && !isExecutingMorning) {
       isExecutingMorning = true;
       bot.customState.routineState = 'day';
+      // 1ブロック幅のドアでの衝突・押し合いを防ぐため、4.5秒間隔で1体ずつ順序正しく出立
       setTimeout(() => {
         executeMorningRoutine(bot, personaKey).catch(e => {
           console.error(`[${botName}] 朝ルーチンエラー:`, e.message);
         });
-      }, index * 1500);
+      }, index * 4500);
     }
   });
 
@@ -2258,7 +2342,7 @@ function startTimeWatcher(bot, personaKey, index) {
         executeMorningRoutine(bot, personaKey).catch(e => {
           console.error(`[${botName}] 朝ルーチンエラー:`, e.message);
         });
-      }, 1000 + index * 1500);
+      }, 1000 + index * 4500);
     }
   });
 }
