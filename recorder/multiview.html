@@ -161,6 +161,18 @@
       color: #58a6ff;
       border: 1px solid rgba(88, 166, 255, 0.4);
       font-family: monospace;
+      transition: all 0.3s ease;
+    }
+    .action-tag.revenge {
+      background: rgba(255, 68, 68, 0.35);
+      color: #ff6b6b;
+      border: 1px solid #ff4444;
+      font-weight: 700;
+      animation: revengePulse 1.2s infinite ease-in-out;
+    }
+    @keyframes revengePulse {
+      0%, 100% { box-shadow: 0 0 6px rgba(255, 68, 68, 0.6); }
+      50% { box-shadow: 0 0 16px rgba(255, 68, 68, 0.95); }
     }
 
     .overlay-top-right {
@@ -457,7 +469,14 @@
           if (res.ok) {
             const data = await res.json();
             // HUD更新
-            document.getElementById(`action-${b.name}`).innerText = data.currentAction || '巡回中';
+            const actEl = document.getElementById(`action-${b.name}`);
+            const act = data.currentAction || '巡回中';
+            actEl.innerText = act;
+            if (act.includes('🔥') || act.includes('復讐') || act.includes('討伐')) {
+              actEl.classList.add('revenge');
+            } else {
+              actEl.classList.remove('revenge');
+            }
             document.getElementById(`coords-${b.name}`).innerHTML = `<span>X:${data.x} Y:${data.y} Z:${data.z}</span><span>YAW:${data.yaw}°</span>`;
             
             const hp = Math.max(0, Math.min(20, data.health || 20));

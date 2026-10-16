@@ -158,14 +158,17 @@ class VisionCapturer {
       // 背景に元のWebGLスクショを描画
       ctx.drawImage(img, 0, 0, width, height);
 
-      // 上部HUD (HP / 空腹度 / 座標)
+      // 上部HUD (HP / 空腹度 / 座標 / 復讐第1目標)
       if (bot && bot.entity) {
         const pos = bot.entity.position;
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        const isRevenge = bot.customState?.revengeMission?.active;
+        const revTarget = isRevenge ? ` | 🔥第1目標:【${bot.customState.revengeMission.enemyName}討伐】` : '';
+
+        ctx.fillStyle = isRevenge ? 'rgba(180, 20, 20, 0.75)' : 'rgba(0, 0, 0, 0.45)';
         ctx.fillRect(5, 5, width - 10, 24);
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText(`POV: ${this.botName} | X:${Math.round(pos.x)} Y:${Math.round(pos.y)} Z:${Math.round(pos.z)} | HP:${bot.health || 20} Food:${bot.food || 20}`, 10, 21);
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText(`POV: ${this.botName} | X:${Math.round(pos.x)} Y:${Math.round(pos.y)} Z:${Math.round(pos.z)} | HP:${bot.health || 20}${revTarget}`, 10, 21);
       }
 
       // 下部チャットログオーバーレイ描画
@@ -254,9 +257,12 @@ class VisionCapturer {
       const yaw = Math.round((bot.entity.yaw * 180 / Math.PI) % 360);
       const pitch = Math.round(bot.entity.pitch * 180 / Math.PI);
       ctx.fillText(`Pos: X:${Math.round(pos.x)} Y:${Math.round(pos.y)} Z:${Math.round(pos.z)} | Yaw:${yaw}° Pitch:${pitch}°`, 15, 45);
-      const action = bot.customState?.currentAction || '巡回/待機中';
+      const isRevenge = bot.customState?.revengeMission?.active;
+      const action = isRevenge 
+        ? `🔥復讐討伐中:【${bot.customState.revengeMission.enemyName}】(第1目標)` 
+        : (bot.customState?.currentAction || '巡回/待機中');
       const held = bot.heldItem ? bot.heldItem.name : '素手';
-      ctx.fillStyle = '#a8ffb2';
+      ctx.fillStyle = isRevenge ? '#ff4d4d' : '#a8ffb2';
       ctx.fillText(`Action: [${action}] | Held: [${held}]`, 15, 82);
 
       // 視界正面のブロック情報

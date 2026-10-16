@@ -386,15 +386,60 @@ async function navigateThroughDoor(bot, enter = true) {
 }
 
 /**
- * 敵対モブ判定ヘルパー
+ * 敵対モブ判定ヘルパーおよび日本語モブ名マッピング
  */
+const MOB_JAPANESE_NAMES = {
+  zombie: 'ゾンビ',
+  skeleton: 'スケルトン',
+  creeper: 'クリーパー',
+  spider: 'クモ',
+  cave_spider: '洞窟グモ',
+  enderman: 'エンダーマン',
+  drowned: 'ドラウンド',
+  witch: 'ウィッチ',
+  phantom: 'ファントム',
+  pillager: 'ピリジャー',
+  vindicator: 'ヴィンディケーター',
+  ravager: 'ラヴェジャー',
+  evoker: 'エヴォーカー',
+  vex: 'ヴェックス',
+  slime: 'スライム',
+  magma_cube: 'マグマキューブ',
+  blaze: 'ブレイズ',
+  ghast: 'ガスト',
+  wither_skeleton: 'ウィザースケルトン',
+  zombified_piglin: 'ゾンビピグリン',
+  piglin: 'ピグリン',
+  piglin_brute: 'ピグリンブルート',
+  hoglin: 'ホグリン',
+  zoglin: 'ゾグリン',
+  husk: 'ハスク',
+  stray: 'ストレイ',
+  warden: 'ウォーデン',
+  silverfish: 'シルバーフィッシュ',
+  guardian: 'ガーディアン',
+  elder_guardian: 'エルダーガーディアン',
+  shulker: 'シュルカー'
+};
+
+function getMobDisplayName(entityOrName) {
+  if (!entityOrName) return '敵対モンスター';
+  const name = typeof entityOrName === 'string' ? entityOrName : (entityOrName.name || entityOrName.displayName || '');
+  const lower = name.toLowerCase().replace(/minecraft:/, '');
+  for (const [key, jpName] of Object.entries(MOB_JAPANESE_NAMES)) {
+    if (lower.includes(key)) return jpName;
+  }
+  return typeof entityOrName === 'object' && entityOrName.displayName ? entityOrName.displayName : name;
+}
+
 function isHostileMob(entity) {
   if (!entity || !entity.name) return false;
   const n = entity.name.toLowerCase();
   const hostileNames = [
     'zombie', 'skeleton', 'spider', 'creeper', 'witch', 'enderman',
     'drowned', 'husk', 'stray', 'cave_spider', 'slime', 'phantom',
-    'pillager', 'vindicator', 'ravager', 'evoker', 'vex', 'silverfish'
+    'pillager', 'vindicator', 'ravager', 'evoker', 'vex', 'silverfish',
+    'guardian', 'warden', 'piglin_brute', 'hoglin', 'zoglin'
   ];
   return hostileNames.some(h => n.includes(h)) || entity.kind === 'Hostile';
 }
@@ -838,6 +883,137 @@ async function engageHostileMob(bot, hostile) {
 }
 
 /**
+ * 仇敵記憶・不眠復讐討伐ミッション (第1目標)
+ * - 死亡時の仇敵（モブ種別・名前）と死亡座標を保持
+ * - 夜間になっても就寝せず（寝る間を惜しんで）討伐を最優先
+ * - 最強武器を構え、死亡地点へ急行
+ * - 現場周辺で仇敵（または敵対モブ）を索敵・撃滅
+ * - 討伐完了時に日誌と勝利チャットを記録しミッション解除
+ */
+async function executeRevengeMission(bot, personaKey) {
+  if (!bot.entity) return;
+  const persona = personas[personaKey] || { name: bot.username };
+  const botName = persona.name;
+  const revenge = bot.customState.revengeMission;
+
+  if (!revenge || !revenge.active) return;
+
+  revenge.attempts = (revenge.attempts || 0) + 1;
+  bot.customState.currentAction = 'revenge';
+  bot.setBotBusy('revenge', 180000); // 3分間の復讐討伐優先モード
+
+  console.log(`⚔️ [${botName}] 【復讐ミッション始動 (試行${revenge.attempts}回目)】目標: 仇敵「${revenge.enemyName}」 現場: (${revenge.deathPos.x}, ${revenge.deathPos.y}, ${revenge.deathPos.z})`);
+
+  try {
+    // 1. 最強装備（剣または斧、防具）を即座に装備
+    await autoEquipAll(bot, 'combat');
+
+    // 2. 死亡現場へ急行
+    const targetX = revenge.deathPos.x;
+    const targetY = revenge.deathPos.y;
+    const targetZ = revenge.deathPos.z;
+
+    console.log(`🏃 [${botName}] 死亡現場 (${targetX}, ${targetY}, ${targetZ}) へ急行中...`);
+    recordDiary(botName, '現場移動', `仇敵「${revenge.enemyName}」を討つため現場(${targetX}, ${targetY}, ${targetZ})へ移動中。`, bot.entity.position);
+
+    if (bot.pathfinder) {
+      bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 3.0));
+      const marchStart = Date.now();
+      while (bot.entity && bot.entity.position.distanceTo(new Vec3(targetX, targetY, targetZ)) > 5.0) {
+        if (!revenge.active) break;
+        // スタック防止・夜間でも進行継続（最大60秒間の移動）
+        if (Date.now() - marchStart > 60000) {
+          console.warn(`[${botName}] 現場移動が長引いたため、現場付近での索敵に移行します。`);
+          break;
+        }
+
+        // 道中で遭遇した直近の敵対モブを迎撃しつつ進む
+        const interceptMob = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 6.5);
+        if (interceptMob) {
+          console.log(`⚔️ [${botName}] 移動ルート上の敵「${interceptMob.name}」を排除します！`);
+          await engageHostileMob(bot, interceptMob);
+          await autoEquipAll(bot, 'combat');
+          if (bot.pathfinder && bot.entity) {
+            bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 3.0));
+          }
+        }
+
+        await new Promise(r => setTimeout(r, 600));
+      }
+      if (bot.pathfinder) bot.pathfinder.setGoal(null);
+    }
+
+    console.log(`🎯 [${botName}] 死亡現場周辺に到達！仇敵「${revenge.enemyName}」を索敵・討伐開始！`);
+    recordDiary(botName, '索敵開始', `現場周辺に到達。仇敵「${revenge.enemyName}」の索敵および交戦を開始。`, bot.entity.position);
+
+    // 3. 現場周辺（半径22ブロック以内）で仇敵を捜索・迎撃
+    const searchStart = Date.now();
+    let killedEnemy = false;
+
+    while (Date.now() - searchStart < 40000) {
+      if (!bot.entity || !revenge.active) break;
+
+      // 条件に合致する敵を優先（同種別 > 近くの敵対モブ全般）
+      const targetEnemy = bot.nearestEntity(e => {
+        if (!isHostileMob(e) || !e.position) return false;
+        if (e.position.distanceTo(bot.entity.position) > 22) return false;
+        if (revenge.enemyType && (e.name === revenge.enemyType || e.name.includes(revenge.enemyType))) return true;
+        return true;
+      });
+
+      if (targetEnemy) {
+        const mobDisplayName = getMobDisplayName(targetEnemy);
+        console.log(`⚔️ [${botName}] 現場にて仇敵「${targetEnemy.name}」（${mobDisplayName}）を発見！討伐戦闘を開始！`);
+        bot.chat(`発見しました！仇敵「${mobDisplayName}」め、覚悟しなさい！`);
+        await engageHostileMob(bot, targetEnemy);
+        killedEnemy = true;
+        break;
+      } else {
+        // 周囲を索敵しながら散策
+        wanderNear(bot, 12);
+        await new Promise(r => setTimeout(r, 1500));
+      }
+    }
+
+    // 4. 結果判定と完了報告
+    if (killedEnemy) {
+      const winQuotes = {
+        Gemini: `仇敵「${revenge.enemyName}」を討伐しました！無事に敵討ちを果たしました！`,
+        ChatGPT: `ターゲット「${revenge.enemyName}」の排除を確認。第1目標【仇敵討伐】を達成しました！`,
+        Claude: `仇敵「${revenge.enemyName}」を討ち果たしました。現場の安全は完全に確保されました。`,
+        Grok: `っしゃあ！仇敵「${revenge.enemyName}」を完全にぶちのめしたぜ！リベンジ大成功だ！`
+      };
+      bot.chat(winQuotes[personaKey] || `仇敵「${revenge.enemyName}」を討ち取りました！復讐完了です！`);
+      recordDiary(botName, '🏆 復讐討伐完了', `現場(${targetX}, ${targetY}, ${targetZ})にて仇敵「${revenge.enemyName}」の討伐に完全勝利！第1目標を達成しました。`, bot.entity.position);
+      revenge.active = false;
+      bot.clearBotBusy();
+    } else {
+      // 敵が見当たらなかった場合（日光で消滅したかデスポーン）
+      console.log(`🛡️ [${botName}] 現場周辺の索敵完了。仇敵「${revenge.enemyName}」は既に消滅・撃退されたことを確認。`);
+      const clearQuotes = {
+        Gemini: `現場周辺(${targetX}, ${targetY}, ${targetZ})を徹底索敵しました。仇敵「${revenge.enemyName}」は既に消滅したようです。現場の安全を確保したため、第1目標を完了とします！`,
+        ChatGPT: `死亡現場の警戒エリアを掃討完了。仇敵「${revenge.enemyName}」のデスポーンまたは消滅を確認したため、リベンジミッションを終了します。`,
+        Claude: `現場を隈なく見回りましたが、仇敵「${revenge.enemyName}」は既にいなくなったようです。安全を確認できましたので任務終了とします。`,
+        Grok: `現場周辺を隅々まで探したぜ！仇敵「${revenge.enemyName}」はビビって逃げたか消滅したらしいな！現場制圧完了だぜ！`
+      };
+      bot.chat(clearQuotes[personaKey] || `現場周辺を索敵し安全を確認しました。仇敵は既に消滅したため討伐完了とします！`);
+      recordDiary(botName, '現場掃討・復讐任務完了', `現場(${targetX}, ${targetY}, ${targetZ})周辺を隈なく索敵。仇敵「${revenge.enemyName}」消滅確認により安全確保完了。`, bot.entity.position);
+      revenge.active = false;
+      bot.clearBotBusy();
+    }
+  } catch (err) {
+    console.error(`[${botName}] 復讐ミッション中にエラー:`, err.message);
+    if (revenge && revenge.active && revenge.attempts < 3) {
+      console.log(`[${botName}] 復讐ミッションを再試行します...`);
+      setTimeout(() => { executeRevengeMission(bot, personaKey); }, 5000);
+    } else if (revenge) {
+      revenge.active = false;
+      bot.clearBotBusy();
+    }
+  }
+}
+
+/**
  * 障害物迂回・スマート脱出ループ (Smart Obstacle Bypass & Detour System)
  * 進行方向にブロックや段差などの障害物がある際、壊さずに
  * 「段差のジャンプ乗り越え」「サイドステップによる回り込み」「後退して別ルート再計算」を実行
@@ -951,7 +1127,17 @@ function createBot(personaKey, index) {
     targetBlock: null,
     busyTimer: null,
     routineState: 'day', // 'day' | 'night' | 'sleeping'
-    lastRoutineDay: -1
+    lastRoutineDay: -1,
+    lastAttacker: null,
+    revengeMission: {
+      active: false,
+      enemyName: null,
+      enemyType: null,
+      deathPos: null,
+      targetPos: null,
+      startTime: 0,
+      attempts: 0
+    }
   };
 
   bot.setBotBusy = function(actionName, timeoutMs = 15000) {
@@ -1120,13 +1306,22 @@ function createBot(personaKey, index) {
     }
   });
 
-  // 敵対モブからの被ダメージ時、直ちに最強武器で反撃
+  // 敵対モブからの被ダメージ時、攻撃者を記録し、直ちに最強武器で反撃
   bot.on('entityHurt', (entity) => {
     if (entity === bot.entity) {
-      const hostile = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 12);
-      if (hostile && !bot.isSleeping) {
-        console.log(`⚔️ [${botName}] ダメージを受けました！直ちに反撃を開始: ${hostile.name}`);
-        engageHostileMob(bot, hostile);
+      const hostile = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 18);
+      if (hostile) {
+        bot.customState.lastAttacker = {
+          id: hostile.id,
+          name: hostile.name,
+          displayName: getMobDisplayName(hostile),
+          position: hostile.position.clone(),
+          time: Date.now()
+        };
+        if (!bot.isSleeping && (!bot.customState.revengeMission || !bot.customState.revengeMission.active)) {
+          console.log(`⚔️ [${botName}] ダメージを受けました！直ちに反撃を開始: ${hostile.name} (${bot.customState.lastAttacker.displayName})`);
+          engageHostileMob(bot, hostile);
+        }
       }
     }
   });
@@ -1203,6 +1398,16 @@ function createBot(personaKey, index) {
 
     // 0. 即時チャットコマンドの判定 (LLM推論を待たずに即時実行)
     const strippedMsg = cleanMessage.replace(/[@＠][a-zA-Z0-9_\u3040-\u30ff\u4e00-\u9faf]+/g, '').trim();
+
+    if (strippedMsg.startsWith('!revenge') || strippedMsg.startsWith('!復讐') || strippedMsg.startsWith('!リベンジ')) {
+      const rev = bot.customState.revengeMission;
+      if (rev && rev.active) {
+        sendReply(`🔥 現在の第1目標：仇敵「${rev.enemyName}」討伐任務中！現場: (${rev.deathPos.x}, ${rev.deathPos.y}, ${rev.deathPos.z}) 寝る間を惜しんで討伐に向かっています！`);
+      } else {
+        sendReply(`現在、仇敵討伐ミッションはありません。平穏無事に行動中です！`);
+      }
+      return;
+    }
 
     if (strippedMsg.startsWith('!ferry') || strippedMsg.startsWith('!boat') || strippedMsg.startsWith('!船') || strippedMsg.startsWith('!ボート')) {
       sendReply(`了解しました！フェリー（木製ボート）を作成して水面に浮かべ、川沿い探検に出発します！`);
@@ -1331,14 +1536,83 @@ function createBot(personaKey, index) {
     }
   });
 
-  // 死亡ログ・リスポーン記録
+  // 死亡ログ・仇敵記憶・リベンジミッション策定
   bot.on('death', () => {
-    console.log(`⚠️ [${botName}] 倒れました。リスポーンします...`);
-    recordDiary(botName, '死亡', `倒れました。リスポーン待機中。`, bot.entity.position);
+    console.log(`⚠️ [${botName}] 倒れました。仇敵と現場座標を記憶して復讐ミッションを策定します...`);
+    const deathPos = (bot.entity && bot.entity.position) 
+      ? bot.entity.position.clone() 
+      : (bot.customState.lastAttacker?.position ? bot.customState.lastAttacker.position.clone() : { x: 95, y: 64, z: 44 });
+
+    // 仇敵の特定（直近40秒以内の攻撃者、または周囲の最寄り敵対モブ）
+    let enemyName = '敵対モンスター';
+    let enemyType = 'hostile_mob';
+    let targetPos = deathPos.clone ? deathPos.clone() : deathPos;
+
+    if (bot.customState.lastAttacker && (Date.now() - bot.customState.lastAttacker.time < 40000)) {
+      enemyName = bot.customState.lastAttacker.displayName;
+      enemyType = bot.customState.lastAttacker.name;
+      if (bot.customState.lastAttacker.position) {
+        targetPos = bot.customState.lastAttacker.position.clone();
+      }
+    } else {
+      const nearbyHostile = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(deathPos) < 22);
+      if (nearbyHostile) {
+        enemyName = getMobDisplayName(nearbyHostile);
+        enemyType = nearbyHostile.name;
+        targetPos = nearbyHostile.position.clone();
+      }
+    }
+
+    const roundedDeathPos = {
+      x: Math.round(deathPos.x || 0),
+      y: Math.round(deathPos.y || 64),
+      z: Math.round(deathPos.z || 0)
+    };
+
+    // 仇敵・死亡座標を記憶し、第1目標に「復讐討伐」をセット
+    bot.customState.revengeMission = {
+      active: true,
+      enemyName: enemyName,
+      enemyType: enemyType,
+      deathPos: roundedDeathPos,
+      targetPos: targetPos,
+      startTime: Date.now(),
+      attempts: 0
+    };
+
+    const deathVows = {
+      Gemini: `…無念です！敵対モブ【${enemyName}】に倒されました…！場所: (${roundedDeathPos.x}, ${roundedDeathPos.y}, ${roundedDeathPos.z})。第1目標を【${enemyName}】討伐に掲げ、寝る間を惜しんで必ず仇を討ちます！`,
+      ChatGPT: `撃沈されました…！相手は【${enemyName}】、座標は(${roundedDeathPos.x}, ${roundedDeathPos.y}, ${roundedDeathPos.z})です。態勢を整え次第、睡眠を返上して仇敵討伐を第1目標として遂行します！`,
+      Claude: `倒されてしまいました…。仇敵は【${enemyName}】、場所は(${roundedDeathPos.x}, ${roundedDeathPos.y}, ${roundedDeathPos.z})。第1目標を仇敵討伐に切り替え、夜を徹してでも討ち果たします。`,
+      Grok: `ぐわっ！【${enemyName}】の野郎に(${roundedDeathPos.x}, ${roundedDeathPos.y}, ${roundedDeathPos.z})でやられたぜ！寝てる暇なんざねえ！最優先で現場に乗り込んで絶対にぶっ倒してやる！`
+    };
+
+    const vow = deathVows[personaKey] || `【${enemyName}】に倒されました！座標(${roundedDeathPos.x}, ${roundedDeathPos.y}, ${roundedDeathPos.z})へ戻り、寝る間を惜しんで討伐します！`;
+    try { bot.chat(vow); } catch (_) {}
+    recordDiary(botName, '💀 死亡・仇敵記憶', `敵対モブ「${enemyName}」(${enemyType})により座標(${roundedDeathPos.x}, ${roundedDeathPos.y}, ${roundedDeathPos.z})で倒されました。第1目標【仇敵討伐（不眠不休）】を設定。`, deathPos);
   });
 
   bot.on('respawn', () => {
-    recordDiary(botName, 'リスポーン', `再スポーンしました。`, bot.entity.position);
+    const revenge = bot.customState.revengeMission;
+    if (revenge && revenge.active) {
+      console.log(`🔥 [${botName}] 再スポーン！第1目標「仇敵【${revenge.enemyName}】討伐」に向けて直ちに出撃します！`);
+      recordDiary(botName, '🔥 出撃・仇敵討伐', `リスポーン完了。第1目標【仇敵「${revenge.enemyName}」討伐】のため現場(${revenge.deathPos.x}, ${revenge.deathPos.y}, ${revenge.deathPos.z})へ出撃。`, bot.entity ? bot.entity.position : null);
+
+      const respawnQuotes = {
+        Gemini: `リスポーンしました！第1目標：仇敵「${revenge.enemyName}」を討伐するため、直ちに現場(${revenge.deathPos.x}, ${revenge.deathPos.y}, ${revenge.deathPos.z})へ急行します！`,
+        ChatGPT: `リスポーン完了。最優先目標である仇敵「${revenge.enemyName}」の排除任務を開始。現場へ直行します。`,
+        Claude: `復活しました。第1目標の仇敵討伐へ向かいます。現場(${revenge.deathPos.x}, ${revenge.deathPos.y}, ${revenge.deathPos.z})へ急ぎます。`,
+        Grok: `リスポーン完了だぜ！仇敵「${revenge.enemyName}」をぶっ飛ばしに現場へ急行するぜ！首を洗って待ってろよ！`
+      };
+      try { bot.chat(respawnQuotes[personaKey] || `リスポーンしました！第1目標：仇敵「${revenge.enemyName}」の現場へ急行します！`); } catch (_) {}
+
+      // 復讐討伐ミッションを即時起動
+      setTimeout(() => {
+        executeRevengeMission(bot, personaKey);
+      }, 1500);
+    } else {
+      recordDiary(botName, 'リスポーン', `再スポーンしました。`, bot.entity ? bot.entity.position : null);
+    }
   });
 
   bot.on('kicked', reason => {
@@ -2417,6 +2691,10 @@ function findAvailableBeds(bot, maxDistance = 24) {
  */
 async function goToBedAndSleep(bot, basePos, personaKey) {
   if (!bot.entity) return false;
+  if (bot.customState?.revengeMission?.active) {
+    console.log(`🔥 [${bot.username}] 仇敵「${bot.customState.revengeMission.enemyName}」討伐中につき寝る間を惜しんで戦います（就寝スキップ）`);
+    return false;
+  }
   const botName = bot.username;
 
   console.log(`🛏️ [${botName}] 拠点内の空いているベッドを探索中...`);
@@ -2532,6 +2810,10 @@ async function goToBedAndSleep(bot, basePos, personaKey) {
  */
 async function patrolBaseAndSleep(bot, baseTarget, personaKey) {
   if (!bot.entity) return false;
+  if (bot.customState?.revengeMission?.active) {
+    console.log(`🔥 [${bot.username}] 仇敵討伐中につき拠点周回就寝をスキップします。`);
+    return false;
+  }
   const botName = bot.username;
   const { Vec3 } = require('vec3');
 
@@ -2667,6 +2949,16 @@ async function executeNightRoutine(bot, personaKey) {
   const botName = persona.name;
   if (!bot.entity) return;
 
+  if (bot.customState?.revengeMission?.active) {
+    const enemyName = bot.customState.revengeMission.enemyName;
+    console.log(`🔥 [${botName}] 仇敵「${enemyName}」討伐任務中につき、寝る間を惜しんで討伐を続行します（就寝ルーチン拒否）`);
+    try {
+      bot.chat(`日が暮れましたが寝ている暇はありません！第1目標「仇敵【${enemyName}】討伐」を果たすまで、寝る間を惜しんで討伐を続行します！`);
+    } catch (_) {}
+    recordDiary(botName, '就寝拒否・討伐続行', `夜間ですが仇敵「${enemyName}」討伐を第1目標として掲げているため、就寝を辞退して戦闘継続。`, bot.entity.position);
+    return;
+  }
+
   bot.setBotBusy('night_routine', 180000);
   console.log(`🌇 [${botName}] 夕暮れ・日没が近づきました。拠点(95, 63, 44)へ帰還を開始します。`);
 
@@ -2781,6 +3073,11 @@ function startTimeWatcher(bot, personaKey, index) {
     // 1. 日没が近づいた（夕暮れ: 11500 ticks 〜 23000 ticks）
     const isSunsetApproaching = timeOfDay >= 11500 && timeOfDay < 23000;
 
+    // 仇敵討伐ミッション中は、寝る間を惜しんで戦うため就寝ルーチンを発動しない
+    if (bot.customState?.revengeMission?.active) {
+      return;
+    }
+
     if (isSunsetApproaching && bot.customState.routineState !== 'night' && bot.customState.lastRoutineDay !== currentDay) {
       if (isExecutingRoutine) return;
       isExecutingRoutine = true;
@@ -2836,7 +3133,8 @@ function startTimeWatcher(bot, personaKey, index) {
 function startCompanionLoop(bot) {
   setInterval(async () => {
     if (!bot.entity || bot.customState.isBusy || bot.isSleeping) return;
-    if (bot.customState.currentAction === 'night_routine') return;
+    if (bot.customState.currentAction === 'night_routine' || bot.customState.currentAction === 'revenge') return;
+    if (bot.customState?.revengeMission?.active) return; // 仇敵討伐ミッション最優先
     // 自律タスク・川沿い探検・フェリー航行・ツールクラフト中はプレイヤー追従で上書きしない
     const isFreeRoaming = bot.customState.currentAction === 'explore_river'
       || bot.customState.currentAction === 'ferry'
@@ -2903,7 +3201,8 @@ function startVisionAutonomousLoop(bot, personaKey) {
   // 3秒間隔で視覚と思考をチェック
   setInterval(async () => {
     if (!bot.entity || bot.isSleeping) return;
-    if (bot.customState.currentAction === 'night_routine') return;
+    if (bot.customState.currentAction === 'night_routine' || bot.customState.currentAction === 'revenge') return;
+    if (bot.customState?.revengeMission?.active) return; // 仇敵討伐ミッション最優先
 
     // 行動中（移動中・ブロック破壊中・戦闘中）は割り込まず完了を待つ
     if (bot.customState.isBusy && bot.customState.currentAction !== 'idle') {
@@ -3287,6 +3586,7 @@ function getBotStatusJson(bot, botName) {
   const yaw = bot.entity ? Math.round((bot.entity.yaw * 180 / Math.PI) % 360) : 0;
   const pitch = bot.entity ? Math.round(bot.entity.pitch * 180 / Math.PI) : 0;
   const targetBlock = bot.blockAtCursor ? bot.blockAtCursor(5) : null;
+  const isRevenge = bot.customState?.revengeMission?.active;
   return {
     botName,
     online: !!bot.entity,
@@ -3298,7 +3598,10 @@ function getBotStatusJson(bot, botName) {
     health: bot.health || 20,
     food: bot.food || 20,
     heldItem: bot.heldItem ? bot.heldItem.name : '素手',
-    currentAction: bot.customState?.currentAction || '巡回/待機中',
+    currentAction: isRevenge 
+      ? `🔥仇敵討伐中:【${bot.customState.revengeMission.enemyName}】` 
+      : (bot.customState?.currentAction || '巡回/待機中'),
+    revengeMission: bot.customState?.revengeMission || null,
     lookingAt: targetBlock ? targetBlock.name : 'なし',
     updatedAt: Date.now()
   };
