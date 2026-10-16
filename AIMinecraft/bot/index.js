@@ -560,6 +560,7 @@ function startSafetyWatchdog(bot) {
   setInterval(() => {
     if (!bot.entity) return;
     if (bot.isSleeping) return; // 就寝中はベッドで安全に休むため解除しない
+    if (bot.vehicle) return; // フェリー（ボート）乗船中は水没と判定せず水上航行を保護
     const botPos = bot.entity.position;
     const headBlock = bot.blockAt(botPos.offset(0, 1.6, 0));
     const isHeadInWater = headBlock && (headBlock.name === 'water' || headBlock.name === 'flowing_water');
@@ -1121,11 +1122,11 @@ function createBot(personaKey, index) {
     }
   });
 
-  // チャット処理の共通ロジック (chatイベント & messagestrイベント両対応)
+  // チャット・ささやき処理の共通ロジック (chat, whisper, messagestr イベント対応)
   let lastHandledChatMsg = '';
   let lastHandledChatTime = 0;
 
-  const handleIncomingChat = async (username, message) => {
+  const handleIncomingChat = async (username, message, isWhisper = false) => {
     if (!message || typeof message !== 'string') return;
     const cleanMessage = message.trim();
     if (!cleanMessage) return;
@@ -1141,7 +1142,11 @@ function createBot(personaKey, index) {
       return;
     }
 
-    const mentionInfo = brain.isMentioned(cleanMessage, personaKey, persona);
+    // ささやき（/tell, /msg, /whisper）の場合は直接自分宛てなので常にメンション該当
+    const mentionInfo = isWhisper
+      ? { mentioned: true, isBroadcast: false }
+      : brain.isMentioned(cleanMessage, personaKey, persona);
+
     const playerEntity = bot.players[username]?.entity;
     const botPos = bot.entity ? bot.entity.position : { x: 0, y: 0, z: 0 };
     const playerPos = playerEntity ? playerEntity.position : botPos;
@@ -1172,51 +1177,90 @@ function createBot(personaKey, index) {
     lastHandledChatMsg = cleanMessage;
     lastHandledChatTime = now;
 
-    console.log(`[Chat Target -> ${botName}] <${username}> ${cleanMessage} (メンション: ${mentionInfo.mentioned}, 一斉: ${mentionInfo.isBroadcast}, 代表: ${isClosestRepresentative})`);
+    console.log(`[${isWhisper ? 'Whisper' : 'Chat'} Target -> ${botName}] <${username}> ${cleanMessage} (ささやき: ${isWhisper}, メンション: ${mentionInfo.mentioned}, 一斉: ${mentionInfo.isBroadcast}, 代表: ${isClosestRepresentative})`);
+
+    // 返答送信ヘルパー関数 (ささやきならwhisper、通常ならchat)
+    const sendReply = (replyText) => {
+      if (isWhisper) {
+        try {
+          bot.whisper(username, replyText);
+        } catch (_) {
+          bot.chat(replyText);
+        }
+      } else {
+        bot.chat(replyText);
+      }
+    };
 
     // 0. 即時チャットコマンドの判定 (LLM推論を待たずに即時実行)
     const strippedMsg = cleanMessage.replace(/[@＠][a-zA-Z0-9_\u3040-\u30ff\u4e00-\u9faf]+/g, '').trim();
+
+    if (strippedMsg.startsWith('!ferry') || strippedMsg.startsWith('!boat') || strippedMsg.startsWith('!船') || strippedMsg.startsWith('!ボート')) {
+      sendReply(`了解しました！フェリー（木製ボート）を作成して水面に浮かべ、川沿い探検に出発します！`);
+      recordDiary(botName, 'コマンド実行', `!ferryコマンドによりフェリー作成＆水上航行を開始。`, bot.entity.position);
+      deployAndRideFerry(bot);
+      return;
+    }
+
+    if (strippedMsg.startsWith('!river') || strippedMsg.startsWith('!川') || strippedMsg.startsWith('!遠出') || strippedMsg.startsWith('!遠征')) {
+      sendReply(`了解しました！川沿いを中心に約150〜200ブロックの遠方まで大探検に出発します！`);
+      recordDiary(botName, 'コマンド実行', `!riverコマンドにより川沿い広域探検を開始。`, bot.entity.position);
+      exploreRiver(bot, 180);
+      return;
+    }
+
+    if (strippedMsg.startsWith('!tools') || strippedMsg.startsWith('!ツール') || strippedMsg.startsWith('!基本ツール') || strippedMsg.startsWith('!木石')) {
+      sendReply(`了解しました！原木と丸石を収集して、木のツルハシから石ツール一式・ボートをクラフトします！`);
+      recordDiary(botName, 'コマンド実行', `!toolsコマンドにより木・石の基本ツール材料収集＆作成を開始。`, bot.entity.position);
+      gatherMaterialsAndCraftTools(bot);
+      return;
+    }
+
     if (strippedMsg.startsWith('!drop') || strippedMsg.startsWith('!give')) {
       const parts = strippedMsg.split(/\s+/);
       const targetItem = parts[1] || 'all';
-      bot.chat(`所持品をお渡しします！`);
+      sendReply(`所持品をお渡しします！`);
       recordDiary(botName, 'コマンド実行', `!drop/!giveコマンドによりプレイヤーへアイテム受け渡しを開始。`, bot.entity.position);
       giveItemsToPlayer(bot, playerEntity, targetItem);
       return;
     }
+
     if (strippedMsg.startsWith('!base') || strippedMsg.startsWith('!sleep') || strippedMsg.startsWith('!拠点') || strippedMsg.startsWith('!寝て') || strippedMsg.startsWith('!おやすみ')) {
-      bot.chat(`拠点(95, 63, 44)へ戻り、所持品をチェストへ預けて寝ます！`);
+      sendReply(`拠点(95, 63, 44)へ戻り、所持品をチェストへ預けて寝ます！`);
       recordDiary(botName, 'コマンド実行', `!base/!sleepコマンドにより拠点帰還＆チェスト収納＆就寝を開始。`, bot.entity.position);
       executeNightRoutine(bot, personaKey);
       return;
     }
+
     if (strippedMsg.startsWith('!explore') || strippedMsg.startsWith('!探検') || strippedMsg.startsWith('!冒険')) {
-      bot.chat(`チェストには触らず、所持品空っぽのまま探検に出発します！`);
-      recordDiary(botName, 'コマンド実行', `!exploreコマンドにより手ぶら探検を開始。`, bot.entity.position);
-      executeMorningRoutine(bot, personaKey);
+      sendReply(`チェストには触らず、所持品空っぽのまま川沿い遠出探検に出発します！`);
+      recordDiary(botName, 'コマンド実行', `!exploreコマンドにより川沿い遠出探検を開始。`, bot.entity.position);
+      exploreRiver(bot, 160);
       return;
     }
+
     if (strippedMsg.startsWith('!door') || strippedMsg.startsWith('!gate') || strippedMsg.startsWith('!ドア') || strippedMsg.startsWith('!ゲート')) {
       const isClose = strippedMsg.includes('close') || strippedMsg.includes('閉') || strippedMsg.includes('しめ');
-      bot.chat(isClose ? '周囲のドア・フェンスゲートを閉めます！' : '周囲のドア・フェンスゲートを開閉します！');
+      sendReply(isClose ? '周囲のドア・フェンスゲートを閉めます！' : '周囲のドア・フェンスゲートを開閉します！');
       toggleNearbyDoors(bot, isClose);
       return;
     }
+
     if (strippedMsg.startsWith('!call') || strippedMsg.startsWith('!reconnect') || strippedMsg.startsWith('!join') || strippedMsg.startsWith('!呼び戻し') || strippedMsg.startsWith('!おいで')) {
       const parts = strippedMsg.split(/\s+/);
       const target = parts[1];
       if (!target || target === 'all' || target === '全員') {
-        bot.chat('ログアウト中のAIPlayer全員をサーバーへ呼び戻します！');
+        sendReply('ログアウト中のAIPlayer全員をサーバーへ呼び戻します！');
         personaKeys.forEach((k, i) => {
           reconnectBot(k, i * 2500);
         });
       } else {
         const foundKey = personaKeys.find(k => k.toLowerCase() === target.toLowerCase() || personas[k]?.name.toLowerCase() === target.toLowerCase());
         if (foundKey) {
-          bot.chat(`${personas[foundKey].name} をサーバーへ呼び戻します！`);
+          sendReply(`${personas[foundKey].name} をサーバーへ呼び戻します！`);
           reconnectBot(foundKey, 1000);
         } else {
-          bot.chat(`対象「${target}」が見つかりません。(利用可能: ${personaKeys.join(', ')})`);
+          sendReply(`対象「${target}」が見つかりません。(利用可能: ${personaKeys.join(', ')})`);
         }
       }
       return;
@@ -1231,9 +1275,9 @@ function createBot(personaKey, index) {
       try {
         const thought = await brain.thinkChat(persona, cleanMessage, playerPos, botPos, botState);
         if (thought && thought.reply) {
-          bot.chat(thought.reply);
+          sendReply(thought.reply);
           brain.addHistory(botName, thought.reply);
-          recordDiary(botName, '対話・指示受信', `プレイヤー「${cleanMessage}」へ返答: "${thought.reply}" (行動: ${thought.action})`, bot.entity.position);
+          recordDiary(botName, isWhisper ? 'ささやき・指示受信' : '対話・指示受信', `プレイヤー「${cleanMessage}」へ返答: "${thought.reply}" (行動: ${thought.action})`, bot.entity.position);
         }
         executeAction(bot, persona, thought, playerEntity);
       } catch (err) {
@@ -1244,16 +1288,30 @@ function createBot(personaKey, index) {
 
   // 標準チャットイベント
   bot.on('chat', (username, message) => {
-    handleIncomingChat(username, message);
+    handleIncomingChat(username, message, false);
   });
 
-  // Paper/Spigot環境でのチャットプラグイン対策 (messagestr フォールバック)
+  // ゲーム画面からのささやき (whisper / /tell / /msg / /w) イベント
+  bot.on('whisper', (username, message) => {
+    handleIncomingChat(username, message, true);
+  });
+
+  // Paper/Spigot環境でのチャット・ささやきプラグイン対策 (messagestr フォールバック)
   bot.on('messagestr', (msgStr) => {
     if (!msgStr) return;
-    // <PlayerName> message または PlayerName: message を抽出
+    // 1. ささやき形式の検知
+    // 例: "Player whispers to you: message", "[Player -> you] message", "Player からのささやき: message"
+    const whisperMatch = msgStr.match(/^([a-zA-Z0-9_]{3,16})\s+(?:whispers to you|whispers|からのささやき|があなたにささやきました):\s*(.*)$/i)
+      || msgStr.match(/^\[([a-zA-Z0-9_]{3,16})\s*->\s*(?:you|me|私|自分)\]\s*(.*)$/i);
+    if (whisperMatch) {
+      handleIncomingChat(whisperMatch[1], whisperMatch[2], true);
+      return;
+    }
+
+    // 2. 通常チャット形式
     const match = msgStr.match(/^<([^>]+)>\s*(.*)$/) || msgStr.match(/^([a-zA-Z0-9_]{3,16}):\s*(.*)$/);
     if (match) {
-      handleIncomingChat(match[1], match[2]);
+      handleIncomingChat(match[1], match[2], false);
     }
   });
 
@@ -1528,6 +1586,11 @@ async function craftAndUpgradeTools(bot) {
 
       // 5. ツールの合成・修復 (Repair)
       await repairDamagedTools(bot, tableBlock);
+
+      // 6. 木材に余裕があればフェリー（木製ボート）もクラフト
+      try {
+        await craftFerry(bot);
+      } catch (_) {}
     }
 
     // クラフト・アップグレード後に最適な武器・ツールを自動装備
@@ -1585,6 +1648,415 @@ async function repairDamagedTools(bot, tableBlock = null) {
 // 既存コードとの互換性エイリアス
 async function craftSurvivalKit(bot) {
   return craftAndUpgradeTools(bot);
+}
+
+/**
+ * フェリー（木製ボート）のクラフト
+ * 原木や木材から作業台を使って木製ボートを作成
+ */
+async function craftFerry(bot) {
+  if (!bot.inventory) return false;
+  const mcData = require('minecraft-data')(bot.version);
+  const botName = bot.username;
+
+  // 1. すでにボートを所持しているか確認
+  const hasBoat = bot.inventory.items().some(i => i.name.endsWith('_boat') || i.name.endsWith('_raft'));
+  if (hasBoat) {
+    console.log(`[${botName}] すでにフェリー（ボート）を所持しています。`);
+    return true;
+  }
+
+  // 2. 原木があれば木材に変換
+  const logs = bot.inventory.items().filter(i => i.name.includes('_log') || i.name.includes('_wood'));
+  for (const log of logs) {
+    const plankName = log.name.replace('_log', '_planks').replace('_wood', '_planks');
+    const plankItem = mcData.itemsByName[plankName] || mcData.itemsByName.oak_planks;
+    if (plankItem) {
+      const recipes = bot.recipesFor(plankItem.id, null, 1, null);
+      if (recipes.length > 0) {
+        try {
+          await bot.craft(recipes[0], Math.min(log.count, 4), null);
+        } catch (_) {}
+      }
+    }
+  }
+
+  // 木材のカウント
+  let planks = bot.inventory.items().filter(i => i.name.includes('_planks'));
+  let totalPlanks = planks.reduce((sum, p) => sum + p.count, 0);
+
+  // 木材が5個未満の場合、近くの木を伐採して木材を補充
+  if (totalPlanks < 5) {
+    console.log(`[${botName}] フェリー作成に必要な木材が不足（現在${totalPlanks}個/必要5個）。原木を伐採します。`);
+    const logBlocks = bot.findBlocks({
+      matching: block => block && block.name && (block.name.includes('_log') || block.name.includes('wood')),
+      maxDistance: 32,
+      count: 2
+    });
+    if (logBlocks.length > 0 && bot.collectBlock) {
+      for (const pos of logBlocks) {
+        const blk = bot.blockAt(pos);
+        if (blk) {
+          try {
+            await new Promise((resolve) => bot.collectBlock.collect(blk, resolve));
+          } catch (_) {}
+        }
+      }
+      // 再度原木を木材に変換
+      const updatedLogs = bot.inventory.items().filter(i => i.name.includes('_log') || i.name.includes('_wood'));
+      for (const log of updatedLogs) {
+        const plankName = log.name.replace('_log', '_planks').replace('_wood', '_planks');
+        const plankItem = mcData.itemsByName[plankName] || mcData.itemsByName.oak_planks;
+        if (plankItem) {
+          const recipes = bot.recipesFor(plankItem.id, null, 1, null);
+          if (recipes.length > 0) {
+            try {
+              await bot.craft(recipes[0], Math.min(log.count, 4), null);
+            } catch (_) {}
+          }
+        }
+      }
+    }
+  }
+
+  // 3. 作業台の確保
+  let tableBlock = bot.findBlock({
+    matching: mcData.blocksByName.crafting_table.id,
+    maxDistance: 16
+  });
+
+  if (!tableBlock) {
+    let tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
+    if (!tableItem) {
+      const cTable = mcData.itemsByName.crafting_table;
+      if (cTable) {
+        const tableRecipes = bot.recipesFor(cTable.id, null, 1, null);
+        if (tableRecipes.length > 0) {
+          try {
+            await bot.craft(tableRecipes[0], 1, null);
+            tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
+          } catch (_) {}
+        }
+      }
+    }
+    if (tableItem) {
+      const ground = bot.blockAt(bot.entity.position.offset(1, -1, 0)) || bot.blockAt(bot.entity.position.offset(0, -1, 1));
+      if (ground && ground.name !== 'air' && !ground.name.includes('water')) {
+        try {
+          await bot.equip(tableItem, 'hand');
+          await bot.placeBlock(ground, { x: 0, y: 1, z: 0 });
+          tableBlock = bot.findBlock({
+            matching: mcData.blocksByName.crafting_table.id,
+            maxDistance: 5
+          });
+        } catch (_) {}
+      }
+    }
+  }
+
+  if (!tableBlock) return false;
+
+  // 4. ボートのクラフト
+  const boatNames = ['oak_boat', 'birch_boat', 'spruce_boat', 'jungle_boat', 'acacia_boat', 'dark_oak_boat', 'mangrove_boat', 'cherry_boat', 'bamboo_raft'];
+  for (const bName of boatNames) {
+    const bItem = mcData.itemsByName[bName];
+    if (bItem) {
+      const recipes = bot.recipesFor(bItem.id, null, 1, tableBlock);
+      if (recipes.length > 0) {
+        try {
+          await bot.craft(recipes[0], 1, tableBlock);
+          console.log(`⛵ [${botName}] フェリー（木製ボート「${bName}」）のクラフトに成功しました！`);
+          recordDiary(botName, 'フェリー作成', `作業台を活用して「${bName}」をクラフトしました！川の遠出探検への準備が整いました。`, bot.entity.position);
+          return true;
+        } catch (e) {
+          console.warn(`[${botName}] ボートクラフト試行失敗:`, e.message);
+        }
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * フェリー（ボート）の展開、乗船、水上航行
+ */
+async function deployAndRideFerry(bot) {
+  if (!bot.entity) return;
+  const botName = bot.username;
+  bot.customState.currentAction = 'ferry';
+  if (bot.setBotBusy) bot.setBotBusy('ferry', 30000);
+
+  try {
+    // 1. ボートのクラフト確認
+    await craftFerry(bot);
+    const boatItem = bot.inventory.items().find(i => i.name.endsWith('_boat') || i.name.endsWith('_raft'));
+
+    // 2. 近くの水ブロック（川や湖）を探索
+    const waterBlocks = bot.findBlocks({
+      matching: block => {
+        if (!block || block.name !== 'water') return false;
+        // 上が空気ブロックである水面ブロック
+        const above = bot.blockAt(block.position.offset(0, 1, 0));
+        return above && (above.name === 'air' || above.name === 'flowing_water');
+      },
+      maxDistance: 32,
+      count: 5
+    });
+
+    if (waterBlocks.length === 0) {
+      console.log(`[${botName}] 周囲に水面が見当たらないため、川の方向を探検します。`);
+      await exploreRiver(bot, 150);
+      return;
+    }
+
+    const targetWaterPos = waterBlocks[0];
+
+    // 水辺の岸辺ブロックへ移動
+    const shoreBlock = bot.findBlock({
+      matching: b => b && !b.name.includes('water') && b.name !== 'air' && b.position.distanceTo(targetWaterPos) <= 3,
+      maxDistance: 32
+    });
+
+    if (shoreBlock) {
+      bot.pathfinder.setGoal(new goals.GoalNear(shoreBlock.position.x, shoreBlock.position.y + 1, shoreBlock.position.z, 1.5));
+      await new Promise(r => setTimeout(r, 2000));
+    }
+
+    // 3. ボートが近くにすでにスポーンしているか確認
+    let boatEntity = bot.nearestEntity(e => (e.name === 'boat' || (e.name && e.name.endsWith('_boat')) || (e.displayName && e.displayName.toLowerCase().includes('boat'))) && e.position.distanceTo(bot.entity.position) < 8);
+
+    // ボートがなければ、アイテムから設置
+    if (!boatEntity && boatItem) {
+      console.log(`⛵ [${botName}] 水面(${targetWaterPos.x}, ${targetWaterPos.y}, ${targetWaterPos.z})にフェリー（ボート）を設置します...`);
+      try {
+        await bot.equip(boatItem, 'hand');
+        const waterBlock = bot.blockAt(targetWaterPos);
+        if (waterBlock) {
+          await bot.activateBlock(waterBlock);
+        }
+        await new Promise(r => setTimeout(r, 1000));
+        boatEntity = bot.nearestEntity(e => (e.name === 'boat' || (e.name && e.name.endsWith('_boat')) || (e.displayName && e.displayName.toLowerCase().includes('boat'))) && e.position.distanceTo(bot.entity.position) < 8);
+      } catch (placeErr) {
+        console.warn(`[${botName}] ボート設置エラー:`, placeErr.message);
+      }
+    }
+
+    // 4. ボートに乗船
+    if (boatEntity) {
+      console.log(`⛵ [${botName}] フェリー（ボート）に乗船します！`);
+      try {
+        await bot.mount(boatEntity);
+        recordDiary(botName, 'フェリー乗船', `フェリーに乗船しました！川を下って遠方まで水上探検を開始します。`, bot.entity.position);
+
+        // 5. 川沿いの水面方向にボートを向けて前進航行 (15秒間の水上クルーズ)
+        const cruiseTime = 15000;
+
+        // 川の流れ・水ブロックが続く方角を計算
+        const farWaterBlocks = bot.findBlocks({
+          matching: b => b && b.name === 'water',
+          maxDistance: 48,
+          count: 20
+        });
+
+        let targetYaw = bot.entity.yaw;
+        if (farWaterBlocks.length > 5) {
+          const farthest = farWaterBlocks.reduce((max, cur) => cur.distanceTo(bot.entity.position) > max.distanceTo(bot.entity.position) ? cur : max, farWaterBlocks[0]);
+          const dx = farthest.x - bot.entity.position.x;
+          const dz = farthest.z - bot.entity.position.z;
+          targetYaw = Math.atan2(-dx, -dz);
+        }
+
+        await bot.look(targetYaw, 0, true);
+        bot.setControlState('forward', true);
+        bot.setControlState('sprint', true);
+
+        await new Promise(r => setTimeout(r, cruiseTime));
+
+        bot.setControlState('forward', false);
+        bot.setControlState('sprint', false);
+
+        // 探検地点に到達したら下船して陸上探検・資材収集へ
+        if (bot.vehicle) {
+          await bot.dismount();
+          console.log(`✅ [${botName}] フェリー航行完了。上陸して探検を継続します。`);
+          recordDiary(botName, 'フェリー航行完了', `フェリーでの水上航行に成功し、遠方地点へ到達しました。上陸して探検を継続します。`, bot.entity.position);
+        }
+      } catch (mountErr) {
+        console.warn(`[${botName}] ボート乗船/航行注意:`, mountErr.message);
+      }
+    } else {
+      // ボート設置が難しい場合でも川沿い徒歩探検へシームレス移行
+      await exploreRiver(bot, 150);
+    }
+  } catch (err) {
+    console.warn(`[${botName}] フェリー処理一部スキップ:`, err.message);
+  } finally {
+    if (bot.clearBotBusy) bot.clearBotBusy();
+    setTimeout(() => {
+      if (bot.customState.currentAction === 'ferry') {
+        bot.customState.currentAction = 'idle';
+      }
+    }, 5000);
+  }
+}
+
+/**
+ * 川沿いを中心とした広域遠出探検
+ * 拠点に留まらず、川沿い（水流・両岸）を中心に100〜200ブロックの遠方まで探検
+ */
+async function exploreRiver(bot, targetDistance = 160) {
+  if (!bot.entity) return;
+  const botName = bot.username;
+  bot.customState.currentAction = 'explore_river';
+  if (bot.setBotBusy) bot.setBotBusy('explore_river', 45000);
+
+  console.log(`🌊 [${botName}] 川沿いを中心とした広域遠出探検（目標距離: 約${targetDistance}m）を開始します！`);
+  recordDiary(botName, '川沿い探検開始', `拠点内に留まらず、川沿いを中心に約${targetDistance}m先までの遠出探検に出発しました。`, bot.entity.position);
+
+  try {
+    const botPos = bot.entity.position;
+
+    // 1. 周囲の川・水ブロック群をスキャン (半径64m)
+    const waterBlocks = bot.findBlocks({
+      matching: b => b && b.name === 'water',
+      maxDistance: 64,
+      count: 50
+    });
+
+    let targetX, targetZ, targetY;
+
+    if (waterBlocks.length >= 10) {
+      // 水ブロック群の主方向ベクトルを算出（川の流れる軸・帯の方向）
+      let sumDx = 0;
+      let sumDz = 0;
+      for (const wPos of waterBlocks) {
+        sumDx += (wPos.x - botPos.x);
+        sumDz += (wPos.z - botPos.z);
+      }
+      const len = Math.sqrt(sumDx * sumDx + sumDz * sumDz) || 1;
+      const dirX = sumDx / len;
+      const dirZ = sumDz / len;
+
+      // 川の伸びる方向に沿って目標距離（90〜targetDistanceブロック先）を算出
+      const actualDist = 90 + Math.random() * (targetDistance - 90);
+      targetX = Math.round(botPos.x + dirX * actualDist + (Math.random() * 20 - 10));
+      targetZ = Math.round(botPos.z + dirZ * actualDist + (Math.random() * 20 - 10));
+      targetY = botPos.y;
+      console.log(`🧭 [${botName}] 川の水流軸を検知: 目標地点 (${targetX}, ${targetY}, ${targetZ}) へ川沿い探検進行！`);
+    } else {
+      // 近くに川が検出されない場合、水辺を探すため広域ランダム方向（80〜140m）へ大胆に出立
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 80 + Math.random() * 60;
+      targetX = Math.round(botPos.x + Math.cos(angle) * dist);
+      targetZ = Math.round(botPos.z + Math.sin(angle) * dist);
+      targetY = botPos.y;
+      console.log(`🧭 [${botName}] 川を求めて広域探索へ出発: 目標地点 (${targetX}, ${targetY}, ${targetZ})`);
+    }
+
+    // パスファインダーで移動開始
+    bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 4.0));
+
+    // 移動中に水辺を見つけたら、ボートがあればフェリー航行への移行も試行
+    setTimeout(async () => {
+      const hasBoat = bot.inventory && bot.inventory.items().some(i => i.name.endsWith('_boat') || i.name.endsWith('_raft'));
+      const nearbyWater = bot.findBlock({ matching: b => b && b.name === 'water', maxDistance: 12 });
+      if (hasBoat && nearbyWater && !bot.vehicle) {
+        console.log(`⛵ [${botName}] 川沿い探検中に水面を発見！フェリーを活用した水上航行に切り替えます。`);
+        deployAndRideFerry(bot);
+      }
+    }, 8000);
+
+  } catch (err) {
+    console.warn(`[${botName}] 川沿い探検エラー:`, err.message);
+  } finally {
+    // 40秒後に通常状態へ安全復帰
+    setTimeout(() => {
+      if (bot.customState.currentAction === 'explore_river') {
+        bot.customState.currentAction = 'idle';
+        if (bot.clearBotBusy) bot.clearBotBusy();
+      }
+    }, 40000);
+  }
+}
+
+/**
+ * 木と石の材料収集＆基本ツール・フェリーの段階的クラフト
+ * 原木伐採 → 木材・棒・作業台作成 → 木のツルハシ作成 → 丸石採掘 → 石ツール一式＆フェリークラフト
+ */
+async function gatherMaterialsAndCraftTools(bot) {
+  if (!bot.entity || !bot.inventory) return;
+  const botName = bot.username;
+  bot.customState.currentAction = 'craft_tools';
+  if (bot.setBotBusy) bot.setBotBusy('craft_tools', 35000);
+
+  console.log(`⚒️ [${botName}] 基本ツール（木・石）およびフェリーの材料収集＆クラフトを開始します！`);
+  recordDiary(botName, '材料収集・クラフト開始', `木や石などの基本ツール作成のため、原木伐採と丸石採掘の一貫自給自足を開始しました。`, bot.entity.position);
+
+  try {
+    const items = bot.inventory.items();
+    const hasLog = items.some(i => i.name.includes('_log') || i.name.includes('_wood'));
+    const plankCount = items.filter(i => i.name.includes('_planks')).reduce((s, p) => s + p.count, 0);
+    const cobbleCount = items.filter(i => i.name === 'cobblestone').reduce((s, c) => s + c.count, 0);
+
+    // 1. 原木・木材の確保（木材換算で8個未満なら伐採）
+    if (!hasLog && plankCount < 8) {
+      console.log(`[${botName}] 原木を探索中...`);
+      autoEquipAll(bot, 'wood');
+      const logBlocks = bot.findBlocks({
+        matching: b => b && b.name && (b.name.includes('_log') || b.name.includes('wood')),
+        maxDistance: 32,
+        count: 2
+      });
+      if (logBlocks.length > 0 && bot.collectBlock) {
+        const blk = bot.blockAt(logBlocks[0]);
+        if (blk) {
+          await new Promise(r => bot.collectBlock.collect(blk, r));
+        }
+      }
+    }
+
+    // 2. 木材・棒・作業台・木のツルハシのクラフト
+    await craftAndUpgradeTools(bot);
+
+    // 3. 丸石の採掘（ツルハシがある場合、石を掘る）
+    const updatedItems = bot.inventory.items();
+    const currentPickaxe = updatedItems.find(i => i.name.includes('pickaxe'));
+
+    if (currentPickaxe && cobbleCount < 8) {
+      console.log(`[${botName}] ツルハシ「${currentPickaxe.name}」を装備して丸石の採掘へ向かいます...`);
+      autoEquipAll(bot, 'mine');
+      const stoneBlocks = bot.findBlocks({
+        matching: b => b && b.name && (b.name === 'stone' || b.name === 'cobblestone' || b.name === 'deepslate'),
+        maxDistance: 20,
+        count: 3
+      });
+      if (stoneBlocks.length > 0 && bot.collectBlock) {
+        for (let i = 0; i < Math.min(stoneBlocks.length, 3); i++) {
+          const sBlk = bot.blockAt(stoneBlocks[i]);
+          if (sBlk) {
+            await new Promise(r => bot.collectBlock.collect(sBlk, r));
+          }
+        }
+      }
+    }
+
+    // 4. 丸石を素材にした石のツール一式（石ツルハシ、石斧、石剣）＆フェリーのクラフト
+    await craftAndUpgradeTools(bot);
+    await craftFerry(bot);
+    await autoEquipAll(bot, 'combat');
+
+    recordDiary(botName, '基本ツール整備完了', `木と石の基本ツール（石のツルハシ・斧・剣）およびフェリーの作成に成功し、装備を更新しました！`, bot.entity.position);
+    console.log(`✅ [${botName}] 基本ツールおよびフェリーの作成が完了しました！`);
+  } catch (err) {
+    console.warn(`[${botName}] 材料収集・ツール作成注意:`, err.message);
+  } finally {
+    if (bot.clearBotBusy) bot.clearBotBusy();
+    setTimeout(() => {
+      if (bot.customState.currentAction === 'craft_tools') {
+        bot.customState.currentAction = 'idle';
+      }
+    }, 5000);
+  }
 }
 
 /**
@@ -2230,17 +2702,17 @@ async function executeMorningRoutine(bot, personaKey) {
     } catch (_) {}
   }
 
-  console.log(`🌅 [${botName}] 朝が来ました！強制ログアウト仕様を廃止し、接続を維持したままドアから外に出て探検に出発します。`);
+  console.log(`🌅 [${botName}] 朝が来ました！強制ログアウト仕様を廃止し、接続を維持したままドアから外に出て川沿い遠出探検に出発します。`);
 
   const morningQuotes = {
-    Gemini: 'おはようございます！朝になりました。ログアウトせず元気に探検へ出発しましょう！',
-    ChatGPT: 'おはようございます！夜が明けました。常駐したままドアから外へ出て探検を再開します。',
-    Claude: '気持ちの良い朝ですね。ログアウトせず、部屋のドアから外へ出て手ぶらで周囲の探検を続けましょう。',
-    Grok: 'よっしゃ朝だぜ！もちろんログアウトなんかしないで、ドアを開けて外へ大冒険に出発だぜ！'
+    Gemini: 'おはようございます！私Geminiが、朝の光とともにドアから出て、川沿いでフェリーを作って約150m先まで大冒険してきますね！',
+    ChatGPT: 'おはようございます。私ChatGPTが、朝の時間を活用して川沿いルートの遠方探検および石・木ツールの整備へ出発いたします。',
+    Claude: '気持ちの良い朝ですね。私Claudeが、安全第一でドアから外へ出て、川沿いを中心に約150m先まで慎重に探検してまいりますね。',
+    Grok: 'よっしゃ朝だぜ！オレ様Grokが、フェリーを作って川沿いを約200m爆走探検してくるぜ！ガッツリ木と石も集めてくるからな！'
   };
 
-  bot.chat(morningQuotes[personaKey] || '朝が来ました！ログアウトせず、ドアから外に出て探検に出発します！');
-  recordDiary(botName, '朝の探検出発', '朝を迎えました。ログアウトせず接続を維持したまま、ドアを通って屋外へ退室し、周辺の探検に出発しました。', bot.entity.position);
+  bot.chat(morningQuotes[personaKey] || '朝が来ました！ログアウトせず、ドアから外に出て川沿い遠出探検に出発します！');
+  recordDiary(botName, '朝の探検出発', '朝を迎えました。ログアウトせず接続を維持したまま、ドアを通って屋外へ退室し、川沿い広域探検に出発しました。', bot.entity.position);
 
   if (bot.clearBotBusy) bot.clearBotBusy();
   bot.customState.targetBedPos = null;
@@ -2252,7 +2724,7 @@ async function executeMorningRoutine(bot, personaKey) {
     console.warn(`[${botName}] ドア通過注意:`, doorErr.message);
   }
 
-  // 外に出てから探検出発
+  // 外に出てから川沿い遠出探検出発
   setTimeout(() => {
     try {
       exploreOutward(bot);
@@ -2263,21 +2735,14 @@ async function executeMorningRoutine(bot, personaKey) {
 }
 
 /**
- * 拠点から離れた外側へ探検移動する
+ * 拠点から離れた外側へ川沿いを中心として遠くまで探検移動する
  */
 function exploreOutward(bot) {
   if (!bot.entity) return;
-  const baseTarget = findBaseLocation(bot);
-
-  // 拠点から外側へランダムな角度で20〜35ブロック離れた座標を計算
-  const angle = Math.random() * Math.PI * 2;
-  const dist = 22 + Math.random() * 15;
-  const targetX = Math.round(baseTarget.x + Math.cos(angle) * dist);
-  const targetZ = Math.round(baseTarget.z + Math.sin(angle) * dist);
-  const targetY = bot.entity.position.y;
-
-  console.log(`🧭 [${bot.username}] 拠点から探検へ出発: 目標 (${targetX}, ${targetY}, ${targetZ})`);
-  bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 2.0));
+  const botName = bot.username;
+  console.log(`🧭 [${botName}] 拠点から川沿い遠出探検へ出発します！`);
+  // 川沿いを中心とした広域遠出探検（120〜180ブロック先）を実行
+  exploreRiver(bot, 160);
 }
 
 /**
@@ -2354,7 +2819,14 @@ function startCompanionLoop(bot) {
   setInterval(async () => {
     if (!bot.entity || bot.customState.isBusy || bot.isSleeping) return;
     if (bot.customState.currentAction === 'night_routine') return;
-    // 自律タスク実行中はプレイヤー追従で上書きしない
+    // 自律タスク・川沿い探検・フェリー航行・ツールクラフト中はプレイヤー追従で上書きしない
+    const isFreeRoaming = bot.customState.currentAction === 'explore_river'
+      || bot.customState.currentAction === 'ferry'
+      || bot.customState.currentAction === 'craft_tools'
+      || bot.customState.currentAction === 'collect_wood'
+      || bot.customState.currentAction === 'mine'
+      || bot.customState.currentAction === 'explore';
+    if (isFreeRoaming) return;
     if (bot.customState.currentAction !== 'idle' && bot.customState.currentAction !== 'follow') return;
 
     try {
@@ -2467,6 +2939,18 @@ function executeAction(bot, persona, thought, targetPlayer) {
   const botName = persona.name;
 
   switch (action) {
+    case 'ferry':
+      deployAndRideFerry(bot);
+      break;
+
+    case 'explore_river':
+      exploreRiver(bot, 160);
+      break;
+
+    case 'craft_tools':
+      gatherMaterialsAndCraftTools(bot);
+      break;
+
     case 'return_base':
       executeNightRoutine(bot, persona.name);
       break;
@@ -2589,12 +3073,15 @@ function executeAction(bot, persona, thought, targetPlayer) {
   }
 }
 
-function wanderNear(bot) {
+function wanderNear(bot, range = null) {
   if (!bot.entity) return;
-  const rx = bot.entity.position.x + (Math.random() * 18 - 9);
-  const rz = bot.entity.position.z + (Math.random() * 18 - 9);
+  // 探索・遠出中はより広範囲（30〜50ブロック）へダイナミックに散策
+  const isExp = bot.customState.currentAction === 'explore_river' || bot.customState.currentAction === 'explore';
+  const r = range || (isExp ? 35 : 18);
+  const rx = bot.entity.position.x + (Math.random() * r * 2 - r);
+  const rz = bot.entity.position.z + (Math.random() * r * 2 - r);
   const ry = bot.entity.position.y;
-  bot.pathfinder.setGoal(new goals.GoalNear(rx, ry, rz, 1));
+  bot.pathfinder.setGoal(new goals.GoalNear(rx, ry, rz, 1.5));
 }
 
 // 4体のBotを順次起動
