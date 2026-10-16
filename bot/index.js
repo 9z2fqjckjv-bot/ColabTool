@@ -1362,12 +1362,18 @@ function createBot(personaKey, index) {
   });
 
   bot.on('error', err => {
-    console.error(`❌ [${botName}] エラー:`, err.message);
+    console.error(`❌ [${botName}] 接続/動作エラー:`, err.message);
+    delete activeBots[personaKey];
+    // ECONNREFUSEDや接続切断時、5秒後に必ず自動再接続を試行
+    if (typeof reconnectBot === 'function') {
+      reconnectBot(personaKey, 5000);
+    }
   });
 
   activeBots[personaKey] = bot;
   return bot;
 }
+
 
 /**
  * 武器・防具・ツールの賢い自動装備 (Auto-Equip Engine)
@@ -3156,12 +3162,25 @@ function reconnectBot(personaKey, delayMs = 3000) {
   }, delayMs);
 }
 
-// 初期起動
+// 初期起動 (3秒おきにスムーズに参加)
 personaKeys.forEach((key, idx) => {
   setTimeout(() => {
     createBot(key, idx);
-  }, idx * 5000);
+  }, idx * 3000);
 });
+
+// 常時生存ウォッチドッグ (12秒ごとに全AIPlayerのオンライン状態を監視し、未接続のボットを自動召喚)
+setInterval(() => {
+  personaKeys.forEach((key, idx) => {
+    const b = activeBots[key];
+    const isOnline = !!(b && b.entity);
+    if (!isOnline && !reconnectTimers[key]) {
+      console.log(`📡 [Liveness Watchdog] ${personas[key]?.name || key} が未参加のため、自動召喚を開始します...`);
+      reconnectBot(key, idx * 2000 + 500);
+    }
+  });
+}, 12000);
+
 
 // コンソール/ターミナル（Colabセル標準入力）からの呼び戻しコマンド受付
 const readline = require('readline');

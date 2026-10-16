@@ -127,8 +127,30 @@ fi
 pkill -9 -f "node index.js" || true
 fuser -k 3001/tcp 3002/tcp 3003/tcp 3004/tcp 2>/dev/null || true
 sleep 1
+
+# Minecraftサーバーのポート25565開放を確実に待機
+echo "Minecraftサーバーポート (25565) の準備を確認中..."
+for i in {1..20}; do
+    if nc -z 127.0.0.1 25565 2>/dev/null || grep -q "Done (" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+done
+
 nohup node index.js > /content/bots.log 2>&1 &
 echo "✅ AIPlayerクラスタをバックグラウンド起動しました (ログ: /content/bots.log)"
+
+echo "AIPlayer (Gemini, ChatGPT, Claude, Grok) のワールド参加を待機中..."
+for i in {1..12}; do
+    if grep -q "スポーン完了" /content/bots.log 2>/dev/null; then
+        echo "🎉 AIPlayerがワールドへ正常にスポーン完了しました！"
+        break
+    fi
+    sleep 1
+    echo -n "."
+done
+echo ""
+
 
 # 7. 4分割画面視線収録 (POV) 開始
 echo ">> [7/7] AIPlayer目線・視線画面収録システム起動中..."

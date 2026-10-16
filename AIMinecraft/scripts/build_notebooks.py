@@ -280,7 +280,7 @@ nb = {
    "metadata": {},
    "outputs": [],
    "source": [
-    "#@title 🔄 稼働中サーバーへの最新反映 (画面収録修復・行動日誌・RadarMap・Bot再起動)\n",
+    "#@title 🔄 稼働中サーバーへの最新反映 (playit固定化・RadarMap配布・LLM確認・Bot再起動)\n",
     "!curl -sL https://raw.githubusercontent.com/9z2fqjckjv-bot/ColabTool/main/scripts/live_apply.sh | bash\n"
    ]
   },
