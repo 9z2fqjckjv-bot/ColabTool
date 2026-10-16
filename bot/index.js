@@ -1342,14 +1342,17 @@ function createBot(personaKey, index) {
   });
 
   bot.on('kicked', reason => {
-    console.warn(`⚠️ [${botName}] KICKされました:`, JSON.stringify(reason));
-    recordDiary(botName, '切断(KICK)', `サーバーからKICKされました: ${JSON.stringify(reason)}`);
+    const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
+    console.warn(`⚠️ [${botName}] KICKされました:`, reasonStr);
+    recordDiary(botName, '切断(KICK)', `サーバーからKICKされました: ${reasonStr}`);
     delete activeBots[personaKey];
-    // 不意のキック時、7秒後に自動で呼び戻し
+    // スロットル制限(Connection throttled)の場合は長め(8.5秒)に待機して再接続
+    const delay = reasonStr.includes('throttled') ? 8500 : 5000;
     if (typeof reconnectBot === 'function') {
-      reconnectBot(personaKey, 7000);
+      reconnectBot(personaKey, delay);
     }
   });
+
 
   bot.on('end', reason => {
     console.warn(`🔌 [${botName}] サーバーから切断（ログアウト）しました:`, reason);
@@ -3162,12 +3165,13 @@ function reconnectBot(personaKey, delayMs = 3000) {
   }, delayMs);
 }
 
-// 初期起動 (3秒おきにスムーズに参加)
+// 初期起動 (4.5秒おきにスムーズに参加し、接続スロットルを確実に回避)
 personaKeys.forEach((key, idx) => {
   setTimeout(() => {
     createBot(key, idx);
-  }, idx * 3000);
+  }, idx * 4500);
 });
+
 
 // 常時生存ウォッチドッグ (12秒ごとに全AIPlayerのオンライン状態を監視し、未接続のボットを自動召喚)
 setInterval(() => {

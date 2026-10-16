@@ -51,6 +51,15 @@ allow-flight=true
 spawn-protection=0
 EOF
 
+# bukkit.yml 最適化 (同一IPからのAIPlayer連続接続制限を完全解除)
+cat << 'EOF' > bukkit.yml
+settings:
+  allow-end: true
+  warn-on-overload: false
+  connection-throttle: -1
+EOF
+
+
 echo "=== [3/4] PaperMC / Purpur (Java 21 最適化サーバー 1.21.1) の準備 ==="
 if [ ! -f "server.jar" ] || [ ! -s "server.jar" ]; then
     echo "最新高速サーバー (Purpur/Paper 1.21.1) をダウンロード中..."

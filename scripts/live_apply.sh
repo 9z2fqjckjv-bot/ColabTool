@@ -98,10 +98,27 @@ fi
 pkill -f "server.jar" || true
 sleep 2
 
+# bukkit.yml 最適化 (AIPlayerが同一IPから即座にログインできるよう connection-throttle を無効化)
+mkdir -p "$SERVER_DIR"
+if [ -f "$SERVER_DIR/bukkit.yml" ]; then
+    sed -i -E 's/connection-throttle:.*/connection-throttle: -1/g' "$SERVER_DIR/bukkit.yml"
+    if ! grep -q "connection-throttle:" "$SERVER_DIR/bukkit.yml"; then
+        echo -e "settings:\n  connection-throttle: -1" >> "$SERVER_DIR/bukkit.yml"
+    fi
+else
+    cat << 'EOF' > "$SERVER_DIR/bukkit.yml"
+settings:
+  allow-end: true
+  warn-on-overload: false
+  connection-throttle: -1
+EOF
+fi
+
 cd "$SERVER_DIR"
 rm -f "$PIPE_PATH" && mkfifo "$PIPE_PATH"
 nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
 echo $! > /content/mc_server.pid
+
 
 echo "Minecraftサーバーの起動完了を待機中..."
 for i in {1..40}; do
@@ -198,7 +215,7 @@ else
 fi
 
 # 8. 稼働診断 (行動日誌 & 画面収録)
-sleep 4
+sleep 7
 echo ""
 echo "=================================================="
 echo "🔍 稼働診断: AIPlayer・画面収録・行動日誌"
@@ -227,8 +244,10 @@ if pgrep -f "ffmpeg -y -f x11grab" > /dev/null 2>&1; then
         echo "$REC_FILES" | awk '{print "      " $9 " (" $5 ")"}'
     fi
 else
-    echo "⚠️ 録画システム起動中または待機中 (/content/recorder.log を確認)"
+    echo "⚠️ 録画システム起動中または待機中 (/content/recorder.log 直近ログ):"
+    tail -n 8 /content/recorder.log 2>/dev/null || true
 fi
+
 
 echo ""
 echo "【3. AIPlayer Bot 直近ログ】"
