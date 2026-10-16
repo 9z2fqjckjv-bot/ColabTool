@@ -86,34 +86,34 @@ if [ "$RADAR_APPLIED" = false ] || [ ! -s "$SERVER_DIR/plugins/RadarMap.jar" ]; 
 fi
 echo "✅ RadarMap.jar の配置完了！"
 
-# 稼働中サーバーへのプラグイン最新反映
+# 3. サーバーのクリーン再起動 (ViaVersionのクラスローダー重複/LinkageError解消 & RadarMap完全反映)
+echo ">> [2/6] Minecraftサーバーのクリーン再起動中 (約15秒)..."
 if [ -p "$PIPE_PATH" ] && pgrep -f "server.jar" > /dev/null 2>&1; then
-    echo ">> 稼働中Minecraftサーバーへプラグイン再読み込み (reload confirm) を送信中..."
-    echo "reload confirm" > "$PIPE_PATH" 2>/dev/null || true
-    sleep 2
-    echo "say [システム] レーダー地図プラグイン(RadarMap)とAI視界システムを最新版に更新しました！" > "$PIPE_PATH" 2>/dev/null || true
+    echo "ワールドデータを保存中..."
+    echo "save-all" > "$PIPE_PATH" 2>/dev/null || true
+    sleep 1
+    echo "stop" > "$PIPE_PATH" 2>/dev/null || true
+    sleep 3
 fi
+pkill -f "server.jar" || true
+sleep 2
 
-# 3. サーバー稼働状態の確認（稼働中なら切断を防ぐため再起動しない）
-echo ">> [2/6] Minecraftサーバー稼働確認..."
-if pgrep -f "server.jar" > /dev/null 2>&1; then
-    echo "✅ Minecraftサーバーは正常稼働中です (プレイヤー切断を防ぐため停止しません)。"
+cd "$SERVER_DIR"
+rm -f "$PIPE_PATH" && mkfifo "$PIPE_PATH"
+nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
+echo $! > /content/mc_server.pid
 
-else
-    echo "⚠️ Minecraftサーバーが停止していたため起動します (約25秒)..."
-    cd "$SERVER_DIR"
-    rm -f "$PIPE_PATH" && mkfifo "$PIPE_PATH"
-    nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
-    echo $! > /content/mc_server.pid
+echo "Minecraftサーバーの起動完了を待機中..."
+for i in {1..40}; do
+    if grep -q "Done (" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+    echo -n "."
+done
+echo ""
+echo "✅ Minecraftサーバーが正常にクリーン起動しました！(ViaVersionの重複解消完了)"
 
-    for i in {1..35}; do
-        if grep -q "Done (" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-    echo "✅ Minecraftサーバー起動完了！"
-fi
 
 # 拠点の安全確保: モブ攻撃・クリーパー爆発・ゾンビドア破壊による拠点チェスト・ベッド・家具破壊を完全無効化
 if [ -p "$PIPE_PATH" ]; then
