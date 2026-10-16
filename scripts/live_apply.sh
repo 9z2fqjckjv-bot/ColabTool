@@ -86,80 +86,40 @@ if [ "$RADAR_APPLIED" = false ] || [ ! -s "$SERVER_DIR/plugins/RadarMap.jar" ]; 
 fi
 echo "✅ RadarMap.jar の配置完了！"
 
-# 3. サーバーのクリーン再起動 (ViaVersionのクラスローダー重複/LinkageError解消 & RadarMap完全反映)
-echo ">> [2/6] Minecraftサーバーのクリーン再起動中..."
-if [ -p "$PIPE_PATH" ] && pgrep -f "server.jar" > /dev/null 2>&1; then
-    echo "ワールドデータを保存中..."
-    echo "save-all" > "$PIPE_PATH" 2>/dev/null || true
-    sleep 1
-    echo "stop" > "$PIPE_PATH" 2>/dev/null || true
-    sleep 2
+# 3. Minecraftサーバーの稼働状態確認 (サーバーは再起動せずプレイヤー接続を100%維持)
+echo ">> [2/6] Minecraftサーバーの稼働確認 (プレイヤー接続維持・再起動なし)..."
+SERVER_IS_RUNNING=false
+if pgrep -f "server.jar" > /dev/null 2>&1 || python3 -c "import socket; s = socket.socket(); s.settimeout(0.5); s.connect(('127.0.0.1', 25565)); s.close()" 2>/dev/null; then
+    SERVER_IS_RUNNING=true
 fi
-pkill -9 -f "server.jar" 2>/dev/null || true
-pkill -9 -f "tail -f $PIPE_PATH" 2>/dev/null || true
-fuser -k -9 25565/tcp 2>/dev/null || true
-sleep 2
 
-# bukkit.yml 最適化 (AIPlayerが同一IPから即座にログインできるよう connection-throttle を無効化)
-mkdir -p "$SERVER_DIR"
-if [ -f "$SERVER_DIR/bukkit.yml" ]; then
-    sed -i -E 's/connection-throttle:.*/connection-throttle: -1/g' "$SERVER_DIR/bukkit.yml"
-    if ! grep -q "connection-throttle:" "$SERVER_DIR/bukkit.yml"; then
-        echo -e "settings:\n  connection-throttle: -1" >> "$SERVER_DIR/bukkit.yml"
+if [ "$SERVER_IS_RUNNING" = true ]; then
+    echo "✅ Minecraftサーバーは稼働中です！プレイヤーの接続を維持するため、サーバーは停止・再起動せず稼働を継続します。"
+    if [ -p "$PIPE_PATH" ]; then
+        echo "gamerule mobGriefing false" > "$PIPE_PATH" 2>/dev/null || true
+        echo "🛡️ gamerule mobGriefing false を設定しました。"
     fi
 else
-    cat << 'EOF' > "$SERVER_DIR/bukkit.yml"
-settings:
-  allow-end: true
-  warn-on-overload: false
-  connection-throttle: -1
-EOF
-fi
+    echo "⚠️ Minecraftサーバーが停止しているため、バックグラウンド起動します..."
+    cd "$SERVER_DIR"
+    rm -f "$PIPE_PATH" && mkfifo "$PIPE_PATH"
+    fuser -k -9 25565/tcp 2>/dev/null || true
+    nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
+    echo $! > /content/mc_server.pid
 
-cd "$SERVER_DIR"
-rm -f "$PIPE_PATH" && mkfifo "$PIPE_PATH"
-fuser -k -9 25565/tcp 2>/dev/null || true
-nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
-echo $! > /content/mc_server.pid
-
-echo "Minecraftサーバーの起動完了 (ポート25565の受付開始) を待機中..."
-SERVER_READY=false
-for i in {1..75}; do
-    # ポート25565が実際にオープン（LISTEN）状態になったか直接確認 (最重要)
-    if python3 -c "import socket; s = socket.socket(); s.settimeout(0.5); s.connect(('127.0.0.1', 25565)); s.close()" 2>/dev/null; then
-        SERVER_READY=true
-        break
-    fi
-    if grep -q "Done (" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
+    echo "Minecraftサーバーの起動完了を待機中..."
+    for i in {1..70}; do
+        if python3 -c "import socket; s = socket.socket(); s.settimeout(0.5); s.connect(('127.0.0.1', 25565)); s.close()" 2>/dev/null; then
+            break
+        fi
         sleep 1
-        SERVER_READY=true
-        break
+        echo -n "."
+    done
+    echo ""
+    echo "✅ Minecraftサーバーの起動が完了しました！"
+    if [ -p "$PIPE_PATH" ]; then
+        echo "gamerule mobGriefing false" > "$PIPE_PATH" 2>/dev/null || true
     fi
-    if grep -q "FAILED TO BIND TO PORT" "$SERVER_DIR/logs/latest.log" 2>/dev/null; then
-        echo ""
-        echo "⚠️ ポート25565競合を検知。ポートを強制解放して再試行..."
-        fuser -k -9 25565/tcp 2>/dev/null || true
-        pkill -9 -f "server.jar" 2>/dev/null || true
-        sleep 2
-        nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
-    fi
-    sleep 1
-    echo -n "."
-done
-echo ""
-
-if [ "$SERVER_READY" = true ]; then
-    echo "✅ Minecraftサーバーがポート25565で正常にクリーン起動しました！(ViaVersionの重複解消完了)"
-else
-    echo "⚠️ Minecraftサーバーの起動待機がタイムアウトしました。直近ログ確認:"
-    tail -n 12 "$SERVER_DIR/logs/latest.log" 2>/dev/null || true
-fi
-
-
-# 拠点の安全確保: モブ攻撃・クリーパー爆発・ゾンビドア破壊による拠点チェスト・ベッド・家具破壊を完全無効化
-if [ -p "$PIPE_PATH" ]; then
-    echo "gamerule mobGriefing false" > "$PIPE_PATH" 2>/dev/null || true
-    echo "🛡️ gamerule mobGriefing false を設定し、モブによる拠点ブロック破壊を無効化しました。"
 fi
 
 # 4. LLMエンジンの起動確認 & 高速モデル準備
@@ -221,20 +181,23 @@ sleep 1
 nohup bash "$REPO_DIR/recorder/record_viewer.sh" > /content/recorder.log 2>&1 &
 echo "✅ 4分割画面収録システムをバックグラウンド起動しました。"
 
-# 7. playit.gg トンネルの再同期 (サーバー再起動に伴う接続切断・リセットを完全防止)
-echo ">> [6/6] playit.gg トンネル状態の同期・リフレッシュ..."
-pkill -9 -f "playit" 2>/dev/null || true
-sleep 1
-PLAYIT_SECRET="5ae8f7c17f9d58ecb144ed6df1f6d1bdffb6a30bc14a09a815976da2ccd174c1"
-mkdir -p /etc/playit /root/.config/playit_gg /content
-if [ -f "$REPO_DIR/playit.toml" ]; then
-    cp -f "$REPO_DIR/playit.toml" /etc/playit/playit.toml
-    cp -f "$REPO_DIR/playit.toml" /root/.config/playit_gg/playit.toml
-    cp -f "$REPO_DIR/playit.toml" /content/playit.toml
+# 7. playit.gg トンネル状態の確認 (接続維持・切断防止)
+echo ">> [6/6] playit.gg トンネル状態確認 (接続維持)..."
+if pgrep -f "playit" > /dev/null 2>&1; then
+    echo "✅ playit.gg トンネルは正常稼働中のため、接続を維持します（プレイヤー切断なし）。"
+else
+    echo "playit トンネルを起動中..."
+    PLAYIT_SECRET="5ae8f7c17f9d58ecb144ed6df1f6d1bdffb6a30bc14a09a815976da2ccd174c1"
+    mkdir -p /etc/playit /root/.config/playit_gg /content
+    if [ -f "$REPO_DIR/playit.toml" ]; then
+        cp -f "$REPO_DIR/playit.toml" /etc/playit/playit.toml
+        cp -f "$REPO_DIR/playit.toml" /root/.config/playit_gg/playit.toml
+        cp -f "$REPO_DIR/playit.toml" /content/playit.toml
+    fi
+    nohup playit --secret "$PLAYIT_SECRET" --stdout > /content/playit.log 2>&1 &
+    sleep 2
+    echo "✅ playit.gg トンネル (zuyasi.playit.plus) を起動しました。"
 fi
-nohup playit --secret "$PLAYIT_SECRET" --stdout > /content/playit.log 2>&1 &
-sleep 2
-echo "✅ playit.gg トンネル (zuyasi.playit.plus) をサーバーと同期して正常稼働開始！"
 
 # 8. 稼働診断 (行動日誌 & 画面収録)
 sleep 7

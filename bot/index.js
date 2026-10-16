@@ -8,6 +8,7 @@ const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const pvp = require('mineflayer-pvp').plugin;
 const autoEat = require('mineflayer-auto-eat').plugin;
 const collectBlock = require('mineflayer-collectblock').plugin;
+const { Vec3 } = require('vec3');
 let viewer = null;
 try {
   viewer = require('prismarine-viewer').mineflayer;
@@ -919,7 +920,7 @@ async function executeRevengeMission(bot, personaKey) {
     if (bot.pathfinder) {
       bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 3.0));
       const marchStart = Date.now();
-      while (bot.entity && bot.entity.position.distanceTo(new Vec3(targetX, targetY, targetZ)) > 5.0) {
+      while (bot.entity && bot.entity.position && bot.entity.position.distanceTo(new Vec3(targetX, targetY, targetZ)) > 5.0) {
         if (!revenge.active) break;
         // スタック防止・夜間でも進行継続（最大60秒間の移動）
         if (Date.now() - marchStart > 60000) {
@@ -928,7 +929,8 @@ async function executeRevengeMission(bot, personaKey) {
         }
 
         // 道中で遭遇した直近の敵対モブを迎撃しつつ進む
-        const interceptMob = bot.nearestEntity(e => isHostileMob(e) && e.position.distanceTo(bot.entity.position) < 6.5);
+        const myPos = bot.entity ? bot.entity.position : null;
+        const interceptMob = myPos ? bot.nearestEntity(e => isHostileMob(e) && e.position && e.position.distanceTo(myPos) < 6.5) : null;
         if (interceptMob) {
           console.log(`⚔️ [${botName}] 移動ルート上の敵「${interceptMob.name}」を排除します！`);
           await engageHostileMob(bot, interceptMob);
@@ -944,19 +946,20 @@ async function executeRevengeMission(bot, personaKey) {
     }
 
     console.log(`🎯 [${botName}] 死亡現場周辺に到達！仇敵「${revenge.enemyName}」を索敵・討伐開始！`);
-    recordDiary(botName, '索敵開始', `現場周辺に到達。仇敵「${revenge.enemyName}」の索敵および交戦を開始。`, bot.entity.position);
+    recordDiary(botName, '索敵開始', `現場周辺に到達。仇敵「${revenge.enemyName}」の索敵および交戦を開始。`, bot.entity ? bot.entity.position : null);
 
     // 3. 現場周辺（半径22ブロック以内）で仇敵を捜索・迎撃
     const searchStart = Date.now();
     let killedEnemy = false;
 
     while (Date.now() - searchStart < 40000) {
-      if (!bot.entity || !revenge.active) break;
+      if (!bot.entity || !bot.entity.position || !revenge.active) break;
 
+      const currentBotPos = bot.entity.position;
       // 条件に合致する敵を優先（同種別 > 近くの敵対モブ全般）
       const targetEnemy = bot.nearestEntity(e => {
         if (!isHostileMob(e) || !e.position) return false;
-        if (e.position.distanceTo(bot.entity.position) > 22) return false;
+        if (e.position.distanceTo(currentBotPos) > 22) return false;
         if (revenge.enemyType && (e.name === revenge.enemyType || e.name.includes(revenge.enemyType))) return true;
         return true;
       });
@@ -1608,42 +1611,48 @@ function createBot(personaKey, index) {
 
       // 復讐討伐ミッションを即時起動
       setTimeout(() => {
-        executeRevengeMission(bot, personaKey);
-      }, 1500);
+        if (!bot.entity) return;
+        executeRevengeMission(bot, personaKey).catch(e => {
+          console.error(`[${botName}] 復讐ミッションエラー:`, e.message);
+        });
+      }, 2000);
     } else {
       recordDiary(botName, 'リスポーン', `再スポーンしました。`, bot.entity ? bot.entity.position : null);
     }
   });
+
+  // Botごとに時間差をつけた再接続遅延 (同時ログインによるConnection throttledを根絶)
+  const personaIdx = ['Gemini', 'ChatGPT', 'Claude', 'Grok'].indexOf(personaKey);
+  const staggerDelay = (personaIdx >= 0 ? personaIdx : 0) * 2500;
 
   bot.on('kicked', reason => {
     const reasonStr = typeof reason === 'string' ? reason : JSON.stringify(reason);
     console.warn(`⚠️ [${botName}] KICKされました:`, reasonStr);
     recordDiary(botName, '切断(KICK)', `サーバーからKICKされました: ${reasonStr}`);
     delete activeBots[personaKey];
-    // スロットル制限(Connection throttled)の場合は長め(8.5秒)に待機して再接続
-    const delay = reasonStr.includes('throttled') ? 8500 : 5000;
+    // スロットル制限(Connection throttled)の場合は長め(10秒〜)に待機して再接続
+    const delay = reasonStr.includes('throttled') ? (10000 + staggerDelay) : (6000 + staggerDelay);
     if (typeof reconnectBot === 'function') {
       reconnectBot(personaKey, delay);
     }
   });
 
-
   bot.on('end', reason => {
     console.warn(`🔌 [${botName}] サーバーから切断（ログアウト）しました:`, reason);
     recordDiary(botName, 'ログアウト', `サーバーから切断されました: ${reason}`);
     delete activeBots[personaKey];
-    // 不意のログアウト時、5秒後に自動で呼び戻し
+    // 不意のログアウト時、時間差で順次呼び戻し
     if (typeof reconnectBot === 'function') {
-      reconnectBot(personaKey, 5000);
+      reconnectBot(personaKey, 5000 + staggerDelay);
     }
   });
 
   bot.on('error', err => {
     console.error(`❌ [${botName}] 接続/動作エラー:`, err.message);
     delete activeBots[personaKey];
-    // ECONNREFUSEDや接続切断時、5秒後に必ず自動再接続を試行
+    // エラー切断時、時間差で再接続
     if (typeof reconnectBot === 'function') {
-      reconnectBot(personaKey, 5000);
+      reconnectBot(personaKey, 6000 + staggerDelay);
     }
   });
 
