@@ -1,0 +1,15 @@
+name: RadarMap
+version: 1.0.0
+main: com.colabtool.radarmap.RadarMapPlugin
+api-version: '1.21'
+author: ColabTool
+description: Real-time auto-scaling radar map for tracking players and AI bots.
+commands:
+  radar:
+    description: Receive a dynamic auto-scaling radar map
+    permission: radarmap.use
+    usage: /radar
+permissions:
+  radarmap.use:
+    description: Allows using /radar command
+    default: true

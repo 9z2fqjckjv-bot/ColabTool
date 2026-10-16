@@ -56,20 +56,49 @@ chmod +x "$REPO_DIR/recorder/record_viewer.sh" "$REPO_DIR/scripts/"*.sh "$REPO_D
 # 2. 自動縮尺レーダー地図プラグイン (RadarMap.jar) の配置
 echo ">> [1/6] レーダー地図プラグインを配置中..."
 mkdir -p "$SERVER_DIR/plugins"
+RADAR_APPLIED=false
 if [ -f "$REPO_DIR/plugins/RadarMap.jar" ]; then
     cp -f "$REPO_DIR/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+    RADAR_APPLIED=true
 elif [ -f "$REPO_DIR/AIMinecraft/plugins/RadarMap.jar" ]; then
     cp -f "$REPO_DIR/AIMinecraft/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+    RADAR_APPLIED=true
 else
     curl -sL -f -o "$SERVER_DIR/plugins/RadarMap.jar" "${BASE_URL}/AIMinecraft/plugins/RadarMap.jar" 2>/dev/null || \
     curl -sL -f -o "$SERVER_DIR/plugins/RadarMap.jar" "${BASE_URL}/plugins/RadarMap.jar" 2>/dev/null || true
+    if [ -s "$SERVER_DIR/plugins/RadarMap.jar" ]; then RADAR_APPLIED=true; fi
+fi
+
+# フォールバック: Java 21 でのオンデマンドビルド
+if [ "$RADAR_APPLIED" = false ] || [ ! -s "$SERVER_DIR/plugins/RadarMap.jar" ]; then
+    BUILD_DIR="/tmp/radarmap_live_build"
+    rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
+    if [ -d "$REPO_DIR/plugins_src/RadarMap" ]; then
+        javac --release 21 -cp "$SERVER_DIR/server.jar" \
+          -d "$BUILD_DIR" \
+          "$REPO_DIR"/plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/*.java 2>/dev/null || true
+        if [ -f "$BUILD_DIR/com/colabtool/radarmap/RadarMapPlugin.class" ]; then
+            cp -f "$REPO_DIR/plugins_src/RadarMap/src/main/resources/plugin.yml" "$BUILD_DIR/"
+            jar -cf "$SERVER_DIR/plugins/RadarMap.jar" -C "$BUILD_DIR" .
+            echo "✅ RadarMap オンデマンドビルドに成功しました！"
+        fi
+    fi
 fi
 echo "✅ RadarMap.jar の配置完了！"
+
+# 稼働中サーバーへのプラグイン最新反映
+if [ -p "$PIPE_PATH" ] && pgrep -f "server.jar" > /dev/null 2>&1; then
+    echo ">> 稼働中Minecraftサーバーへプラグイン再読み込み (reload confirm) を送信中..."
+    echo "reload confirm" > "$PIPE_PATH" 2>/dev/null || true
+    sleep 2
+    echo "say [システム] レーダー地図プラグイン(RadarMap)とAI視界システムを最新版に更新しました！" > "$PIPE_PATH" 2>/dev/null || true
+fi
 
 # 3. サーバー稼働状態の確認（稼働中なら切断を防ぐため再起動しない）
 echo ">> [2/6] Minecraftサーバー稼働確認..."
 if pgrep -f "server.jar" > /dev/null 2>&1; then
     echo "✅ Minecraftサーバーは正常稼働中です (プレイヤー切断を防ぐため停止しません)。"
+
 else
     echo "⚠️ Minecraftサーバーが停止していたため起動します (約25秒)..."
     cd "$SERVER_DIR"
@@ -135,12 +164,18 @@ if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev
     rm -f /tmp/google-chrome.deb
 fi
 
-pkill -f "ffmpeg -y -f x11grab" || true
+# 直前の録画を安全にクローズ
+pkill -INT -f "ffmpeg -y -f x11grab" 2>/dev/null || true
+sleep 1.5
+pkill -f "ffmpeg" || true
 pkill -f "multiview.html" || true
 pkill -f "http.server 8088" || true
 pkill -f "openbox" || true
 pkill -f "Xvfb :99" || true
+pkill -f "chromium" || true
+pkill -f "google-chrome" || true
 sleep 1
+
 
 nohup bash "$REPO_DIR/recorder/record_viewer.sh" > /content/recorder.log 2>&1 &
 echo "✅ 4分割画面収録システムをバックグラウンド起動しました。"

@@ -1037,17 +1037,26 @@ function createBot(personaKey, index) {
       return originalDig(block, forceLook, digFace);
     };
 
-    // 視線 (First-Person POV) Prismarine-Viewer 起動
+    // 視線 (First-Person POV) 配信システムの起動 (Prismarine-Viewer + 堅牢フォールバックHTTPサーバー)
+    let viewerStarted = false;
     if (viewer) {
       try {
         viewer(bot, { port: viewerPort, firstPerson: true, viewDistance: 4 });
-        console.log(`🎥 [${botName}] 一人称視点Webストリーム配信中 -> ポート ${viewerPort}`);
+        viewerStarted = true;
+        console.log(`🎥 [${botName}] 一人称視点3D Webストリーム配信中 -> ポート ${viewerPort}`);
       } catch (err) {
-        console.warn(`[${botName}] Viewer起動スキップ:`, err.message);
+        console.warn(`[${botName}] 3D Viewer起動スキップ:`, err.message);
       }
-    } else {
-      console.warn(`[${botName}] prismarine-viewer未ロードのためWeb配信スキップ (代替HUD機能で動作中)`);
     }
+    
+    // 3D Viewerが起動できなかった場合の多重防壁フォールバック (内蔵POV Webサーバー)
+    if (!viewerStarted) {
+      startFallbackViewerServer(bot, botName, viewerPort, visionCapturer);
+    }
+
+    // 各Botのリアルタイムステータス(JSON)を1秒おきに書き出し (multiview.html連携)
+    startStatusSyncLoop(bot, botName);
+
 
     // 3秒おきの一人称視界スクリーンショット自動取得を開始
     visionCapturer.startLoop(bot, 3000);
@@ -3126,7 +3135,14 @@ function reconnectBot(personaKey, delayMs = 3000) {
         if (activeBots[personaKey].viewer && typeof activeBots[personaKey].viewer.close === 'function') {
           activeBots[personaKey].viewer.close();
         }
+        if (activeBots[personaKey].fallbackViewerServer && typeof activeBots[personaKey].fallbackViewerServer.close === 'function') {
+          try { activeBots[personaKey].fallbackViewerServer.close(); } catch (_) {}
+        }
+        if (activeBots[personaKey].statusSyncTimer) {
+          clearInterval(activeBots[personaKey].statusSyncTimer);
+        }
         activeBots[personaKey].removeAllListeners();
+
         if (typeof activeBots[personaKey].quit === 'function') {
           activeBots[personaKey].quit();
         }
@@ -3180,5 +3196,113 @@ rl.on('line', (line) => {
     });
   }
 });
+
+/**
+ * 3D Prismarine-Viewerが起動できない場合のフォールバックHTTPサーバー
+ * 各ポート (3001..3004) で稼働し、リアルタイム視界スナップショットやHUDを確実に提供する
+ */
+function startFallbackViewerServer(bot, botName, port, visionCapturer) {
+  const http = require('http');
+  const server = http.createServer((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+
+    if (req.url.startsWith('/snapshot.jpg') || req.url.startsWith('/pov.jpg')) {
+      const snap = visionCapturer.latestScreenshot;
+      if (snap) {
+        res.writeHead(200, { 'Content-Type': 'image/jpeg', 'Cache-Control': 'no-cache, no-store' });
+        return res.end(snap);
+      } else {
+        res.writeHead(404);
+        return res.end('Not ready');
+      }
+    }
+
+    if (req.url === '/api/status') {
+      const status = getBotStatusJson(bot, botName);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify(status));
+    }
+
+    // デフォルト: リアルタイム自動更新のPOVビューアHTML
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${botName} Live POV</title>
+<style>
+  body { margin:0; background:#05080f; overflow:hidden; font-family:sans-serif; }
+  img { width:100vw; height:100vh; object-fit:cover; display:block; }
+</style>
+</head>
+<body>
+  <img id="pov" src="/snapshot.jpg?t=${Date.now()}" />
+  <script>
+    const img = document.getElementById('pov');
+    setInterval(() => {
+      img.src = '/snapshot.jpg?t=' + Date.now();
+    }, 1500);
+  </script>
+</body>
+</html>`);
+  });
+
+  server.on('error', (err) => {
+    console.warn(`[FallbackViewer - ${botName}] ポート ${port} 起動エラー:`, err.message);
+  });
+
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`🛡️ [FallbackViewer - ${botName}] POV Webサーバーがポート ${port} で稼働開始しました`);
+  });
+
+  bot.fallbackViewerServer = server;
+}
+
+function getBotStatusJson(bot, botName) {
+  const pos = bot.entity?.position || { x: 0, y: 0, z: 0 };
+  const yaw = bot.entity ? Math.round((bot.entity.yaw * 180 / Math.PI) % 360) : 0;
+  const pitch = bot.entity ? Math.round(bot.entity.pitch * 180 / Math.PI) : 0;
+  const targetBlock = bot.blockAtCursor ? bot.blockAtCursor(5) : null;
+  return {
+    botName,
+    online: !!bot.entity,
+    x: Math.round(pos.x),
+    y: Math.round(pos.y),
+    z: Math.round(pos.z),
+    yaw,
+    pitch,
+    health: bot.health || 20,
+    food: bot.food || 20,
+    heldItem: bot.heldItem ? bot.heldItem.name : '素手',
+    currentAction: bot.customState?.currentAction || '巡回/待機中',
+    lookingAt: targetBlock ? targetBlock.name : 'なし',
+    updatedAt: Date.now()
+  };
+}
+
+function startStatusSyncLoop(bot, botName) {
+  const fs = require('fs');
+  const path = require('path');
+  const recDir = '/content/recordings';
+  const recorderDir = path.resolve(__dirname, '../recorder');
+
+  const timer = setInterval(() => {
+    if (!bot.entity) return;
+    try {
+      const data = JSON.stringify(getBotStatusJson(bot, botName));
+      const fname = `status_${botName.toLowerCase()}.json`;
+      if (fs.existsSync(recDir)) {
+        fs.writeFileSync(path.join(recDir, fname), data);
+      }
+      if (fs.existsSync(recorderDir)) {
+        fs.writeFileSync(path.join(recorderDir, fname), data);
+      }
+    } catch (_) {}
+  }, 1200);
+
+  bot.statusSyncTimer = timer;
+}
+
 
 

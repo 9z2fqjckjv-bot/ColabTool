@@ -11,7 +11,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== [1/4] Java 21 JDK および必要パッケージのセットアップ ==="
 apt-get update -qq
-apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils openbox wget zstd nodejs npm rsync build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev > /dev/null 2>&1
+apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils openbox wget zstd nodejs npm rsync build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev mesa-utils libgl1-mesa-dri > /dev/null 2>&1
 
 # 画面収録用ブラウザ (Google Chrome 安定版) の確認・インストール
 if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
@@ -51,19 +51,11 @@ allow-flight=true
 spawn-protection=0
 EOF
 
-echo "=== [3/4] PaperMC (Java 21 最適化サーバー) のダウンロード ==="
-if [ ! -f "server.jar" ]; then
-    PAPER_PROJECT="paper"
-    LATEST_BUILD=$(curl -s "https://api.papermc.io/v2/projects/${PAPER_PROJECT}/versions/${MINECRAFT_VERSION}" | jq '.builds[-1]')
-    if [ "$LATEST_BUILD" != "null" ] && [ -n "$LATEST_BUILD" ]; then
-        JAR_NAME="${PAPER_PROJECT}-${MINECRAFT_VERSION}-${LATEST_BUILD}.jar"
-        DOWNLOAD_URL="https://api.papermc.io/v2/projects/${PAPER_PROJECT}/versions/${MINECRAFT_VERSION}/builds/${LATEST_BUILD}/downloads/${JAR_NAME}"
-        echo "PaperMC Build #${LATEST_BUILD} をダウンロード中: $DOWNLOAD_URL"
-        curl -s -o server.jar "$DOWNLOAD_URL"
-    else
-        echo "Purpurのフォールバックダウンロード..."
-        curl -s -o server.jar "https://api.purpurmc.org/v2/purpur/${MINECRAFT_VERSION}/latest/download"
-    fi
+echo "=== [3/4] PaperMC / Purpur (Java 21 最適化サーバー 1.21.1) の準備 ==="
+if [ ! -f "server.jar" ] || [ ! -s "server.jar" ]; then
+    echo "最新高速サーバー (Purpur/Paper 1.21.1) をダウンロード中..."
+    curl -sL -f -o server.jar "https://api.purpurmc.org/v2/purpur/${MINECRAFT_VERSION}/latest/download" || \
+    curl -sL -f -o server.jar "https://download.purpurmc.org/purpur/1.21.1/latest/purpur-1.21.1.jar" || true
     echo "server.jar の準備完了"
 else
     echo "既存の server.jar が見つかりました。"
@@ -93,12 +85,33 @@ fi
 
 echo "=== [追加2] 自動縮尺レーダー地図プラグイン (RadarMap) の導入 ==="
 mkdir -p "$SERVER_DIR/plugins"
+RADAR_DEPLOYED=false
+
 if [ -f "$REPO_DIR/plugins/RadarMap.jar" ]; then
     cp -f "$REPO_DIR/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
-    echo "✅ RadarMap.jar の導入完了！"
+    RADAR_DEPLOYED=true
+    echo "✅ RadarMap.jar (Java 21 互換版) の導入完了！"
 elif [ -f "/tmp/ColabTool_fetch/plugins/RadarMap.jar" ]; then
     cp -f "/tmp/ColabTool_fetch/plugins/RadarMap.jar" "$SERVER_DIR/plugins/RadarMap.jar"
+    RADAR_DEPLOYED=true
     echo "✅ RadarMap.jar の導入完了！"
+fi
+
+# フォールバック: もし万が一JARが存在しない、または破損している場合はJava 21で即時オンデマンドビルド
+if [ "$RADAR_DEPLOYED" = false ] || [ ! -s "$SERVER_DIR/plugins/RadarMap.jar" ]; then
+    echo "RadarMap ソースから Java 21 向け自動コンパイルを実行中..."
+    BUILD_DIR="/tmp/radarmap_live_build"
+    rm -rf "$BUILD_DIR" && mkdir -p "$BUILD_DIR"
+    if [ -d "$REPO_DIR/plugins_src/RadarMap" ]; then
+        javac --release 21 -cp "$SERVER_DIR/server.jar" \
+          -d "$BUILD_DIR" \
+          "$REPO_DIR"/plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/*.java 2>/dev/null || true
+        if [ -f "$BUILD_DIR/com/colabtool/radarmap/RadarMapPlugin.class" ]; then
+            cp -f "$REPO_DIR/plugins_src/RadarMap/src/main/resources/plugin.yml" "$BUILD_DIR/"
+            jar -cf "$SERVER_DIR/plugins/RadarMap.jar" -C "$BUILD_DIR" .
+            echo "✅ RadarMap オンデマンドビルドに成功しました！"
+        fi
+    fi
 fi
 
 echo "=== サーバーセットアップ完了 ==="

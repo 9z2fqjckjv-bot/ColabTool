@@ -72,15 +72,15 @@ TARGET_URL="http://127.0.0.1:8088/multiview.html"
 rm -rf /tmp/rec_chrome_profile
 mkdir -p /tmp/rec_chrome_profile
 
-# WebGL (Three.js) を描画可能にするため SwiftShader / ANGLE を指定し、バックグラウンド抑制を無効化
+# WebGL (Three.js) を安定描画可能にするための最適化フラグ
 $BROWSER \
     --no-sandbox \
     --disable-setuid-sandbox \
     --disable-dev-shm-usage \
+    --disable-gpu-sandbox \
     --enable-webgl \
     --ignore-gpu-blocklist \
-    --use-gl=angle \
-    --use-angle=swiftshader \
+    --use-gl=swiftshader \
     --enable-unsafe-swiftshader \
     --window-size=1920,1080 \
     --window-position=0,0 \
@@ -105,17 +105,25 @@ sleep 4
 
 echo "=== [4/4] ffmpeg による4画面統合POV収録開始 ==="
 echo "録画出力先: $OUTPUT_FILE"
+# -movflags +frag_keyframe+separate_moof+default_base_moof+empty_moov により
+# 途中で強制終了やColab切断が発生しても、録画データが一切壊れず完全に再生可能なフラグメントMP4として保存
 ffmpeg -y -f x11grab -draw_mouse 0 -video_size 1920x1080 -framerate 24 -i :99.0 \
-    -c:v libx264 -preset ultrafast -pix_fmt yuv420p "$OUTPUT_FILE" > "$RECORDINGS_DIR/ffmpeg.log" 2>&1 &
+    -c:v libx264 -preset ultrafast -pix_fmt yuv420p \
+    -movflags +frag_keyframe+separate_moof+default_base_moof+empty_moov \
+    "$OUTPUT_FILE" > "$RECORDINGS_DIR/ffmpeg.log" 2>&1 &
 FFMPEG_PID=$!
 
 sleep 2
 if kill -0 "$FFMPEG_PID" 2>/dev/null; then
     echo "✅ 4分割画面収録システムが正常稼働しました！ (Xvfb:$XVFB_PID, Web:$HTTP_PID, Chrome:$BROWSER_PID, ffmpeg:$FFMPEG_PID)"
-    echo "$XVFB_PID $HTTP_PID $BROWSER_PID $FFMPEG_PID" > /content/recorder_pids.txt
+    # 個別PIDと順番を明記して安全シャットダウン可能にする
+    echo "FFMPEG_PID=$FFMPEG_PID" > /content/recorder_pids.txt
+    echo "BROWSER_PID=$BROWSER_PID" >> /content/recorder_pids.txt
+    echo "HTTP_PID=$HTTP_PID" >> /content/recorder_pids.txt
+    echo "XVFB_PID=$XVFB_PID" >> /content/recorder_pids.txt
     echo "$OUTPUT_FILE" > /content/current_recording_file.txt
 else
     echo "⚠️ ffmpeg 起動エラーの可能性があります。直近ログ:"
-    tail -n 10 "$RECORDINGS_DIR/ffmpeg.log" 2>/dev/null || true
+    tail -n 15 "$RECORDINGS_DIR/ffmpeg.log" 2>/dev/null || true
 fi
 

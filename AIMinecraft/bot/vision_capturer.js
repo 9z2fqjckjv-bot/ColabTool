@@ -88,41 +88,61 @@ class VisionCapturer {
     this.isCapturing = true;
 
     try {
+      let finalBuffer = null;
+
       // 1. PuppeteerによるWebGLビューアの直接スクショ + チャットオーバーレイ合成
       if (this.page) {
         try {
           const rawBuffer = await this.page.screenshot({
             type: 'jpeg',
-            quality: 70
+            quality: 75
           });
           if (rawBuffer && rawBuffer.length > 0) {
-            const composite = await this.overlayChatOnImage(rawBuffer, chatMessages, bot);
-            this.latestScreenshot = composite;
-            this.latestBase64 = composite.toString('base64');
-            this.lastCaptureTime = Date.now();
-            return { buffer: this.latestScreenshot, base64: this.latestBase64 };
+            finalBuffer = await this.overlayChatOnImage(rawBuffer, chatMessages, bot);
           }
         } catch (pageErr) {
-          // ページ再接続が必要な場合
           this.page = null;
         }
       }
 
       // 2. ブラウザ初期化がまだなら試行
-      if (this.puppeteerAvailable && !this.browser) {
+      if (!finalBuffer && this.puppeteerAvailable && !this.browser) {
         this.initBrowser().catch(() => {});
       }
 
-      // 3. 高速Canvas視覚HUD生成 (チャットオーバーレイ付き)
-      const fallbackBuffer = this.renderVisualHud(bot, chatMessages);
-      this.latestScreenshot = fallbackBuffer;
-      this.latestBase64 = fallbackBuffer.toString('base64');
-      this.lastCaptureTime = Date.now();
-      return { buffer: this.latestScreenshot, base64: this.latestBase64 };
+      // 3. 高精度Canvas視覚HUD生成 (視線・手持ち・周囲モブ・ブロック・チャット)
+      if (!finalBuffer) {
+        finalBuffer = this.renderVisualHud(bot, chatMessages);
+      }
+
+      if (finalBuffer) {
+        this.latestScreenshot = finalBuffer;
+        this.latestBase64 = finalBuffer.toString('base64');
+        this.lastCaptureTime = Date.now();
+
+        // 画面収録用マルチビュー HTML が直接取得できるようファイル出力
+        try {
+          const fs = require('fs');
+          const path = require('path');
+          const recDir = '/content/recordings';
+          if (!fs.existsSync(recDir)) fs.mkdirSync(recDir, { recursive: true });
+          const fname = `pov_${this.botName.toLowerCase()}.jpg`;
+          fs.writeFileSync(path.join(recDir, fname), finalBuffer);
+          
+          // recorder ディレクトリにも同期 (http://127.0.0.1:8088/ から直接アクセス可能にする)
+          const repoRecorderDir = path.resolve(__dirname, '../recorder');
+          if (fs.existsSync(repoRecorderDir)) {
+            fs.writeFileSync(path.join(repoRecorderDir, fname), finalBuffer);
+          }
+        } catch (_) {}
+
+        return { buffer: this.latestScreenshot, base64: this.latestBase64 };
+      }
     } finally {
       this.isCapturing = false;
     }
   }
+
 
   /**
    * Puppeteer画像の上にチャットログとHUDをオーバーレイ合成
@@ -234,14 +254,18 @@ class VisionCapturer {
       const yaw = Math.round((bot.entity.yaw * 180 / Math.PI) % 360);
       const pitch = Math.round(bot.entity.pitch * 180 / Math.PI);
       ctx.fillText(`Pos: X:${Math.round(pos.x)} Y:${Math.round(pos.y)} Z:${Math.round(pos.z)} | Yaw:${yaw}° Pitch:${pitch}°`, 15, 45);
-      ctx.fillText(`HP: ${bot.health || 20}/20 | Food: ${bot.food || 20}/20 | Air: ${bot.oxygenLevel || 20}/20`, 15, 65);
+      const action = bot.customState?.currentAction || '巡回/待機中';
+      const held = bot.heldItem ? bot.heldItem.name : '素手';
+      ctx.fillStyle = '#a8ffb2';
+      ctx.fillText(`Action: [${action}] | Held: [${held}]`, 15, 82);
 
       // 視界正面のブロック情報
       const targetBlock = bot.blockAtCursor ? bot.blockAtCursor(5) : null;
       if (targetBlock) {
         ctx.fillStyle = '#ffd32a';
-        ctx.fillText(`Looking At: [${targetBlock.name}] at distance ${Math.round(targetBlock.position.distanceTo(pos))}m`, 15, 90);
+        ctx.fillText(`Looking At: [${targetBlock.name}] at distance ${Math.round(targetBlock.position.distanceTo(pos))}m`, 15, 100);
       }
+
 
       // 視界内のモブ描画（マーカー）
       const nearby = Object.values(bot.entities || {})
