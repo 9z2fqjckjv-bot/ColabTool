@@ -29,7 +29,7 @@ const personas = require('./persona');
 const AIBrain = require('./brain');
 const VisionCapturer = require('./vision_capturer');
 
-const SERVER_HOST = process.env.MC_HOST || 'localhost';
+const SERVER_HOST = process.env.MC_HOST || '127.0.0.1';
 const SERVER_PORT = parseInt(process.env.MC_PORT || '25565', 10);
 const LOGS_DIR = process.env.LOGS_DIR || '/content/logs';
 
