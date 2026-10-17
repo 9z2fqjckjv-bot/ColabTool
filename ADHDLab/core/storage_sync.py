@@ -88,9 +88,13 @@ class StorageSyncManager:
                         shutil.copy2(src, dst)
                         copied_files.append(rel_path)
 
+            # LLMモデルデータの確認
+            models_dir = os.path.join(target_dir, "models")
+            model_info = "LLMモデル永続化済み" if os.path.exists(models_dir) and os.listdir(models_dir) else "LLMモデル待機中"
+
             return {
                 "status": "success",
-                "message": f"同期完了 ({len(copied_files)} ファイル永続化)",
+                "message": f"同期完了 ({len(copied_files)} ファイル永続化, {model_info})",
                 "target": target_dir,
                 "files": copied_files
             }

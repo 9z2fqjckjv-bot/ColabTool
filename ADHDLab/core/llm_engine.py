@@ -30,19 +30,37 @@ ADHD_SYSTEM_PROMPT = """あなたはADHD（注意欠陥多動性障害）の自�
 """
 
 
+DRIVE_MODEL_DIR = "/content/drive/MyDrive/ADHDLab/models"
+
 class LLMEngine:
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-14B-Instruct", device: str = "auto"):
+    def __init__(self, model_name: str = "Qwen/Qwen2.5-14B-Instruct", device: str = "auto", cache_dir: Optional[str] = None):
         self.model_name = model_name
         self.device = device
         self.model = None
         self.tokenizer = None
         self.is_loaded = False
         self.lock = threading.Lock()
+        
+        # Google Drive連携：Google Driveがマウントされている場合はDrive内にLLMモデルを永続保管
+        if cache_dir:
+            self.cache_dir = cache_dir
+        elif os.path.exists("/content/drive/MyDrive"):
+            self.cache_dir = DRIVE_MODEL_DIR
+            os.makedirs(self.cache_dir, exist_ok=True)
+            os.environ["HF_HOME"] = os.path.join(self.cache_dir, "hf_home")
+        else:
+            self.cache_dir = None
 
     def load_model(self, model_id: Optional[str] = None):
-        """モデルをVRAMにロード（4bit量子化でL4 GPUに最適化）"""
+        """モデルをVRAMにロード（Google Driveキャッシュ連携＆4bit量子化 on L4 GPU）"""
         if model_id:
             self.model_name = model_id
+
+        # Google Driveのマウント後チェック
+        if not self.cache_dir and os.path.exists("/content/drive/MyDrive"):
+            self.cache_dir = DRIVE_MODEL_DIR
+            os.makedirs(self.cache_dir, exist_ok=True)
+            os.environ["HF_HOME"] = os.path.join(self.cache_dir, "hf_home")
 
         if not HAS_TORCH or not torch.cuda.is_available():
             print(f"⚠️ CUDA環境が検出されないかPyTorchがありません。シミュレーション/APIモードで動作します: {self.model_name}")
@@ -50,7 +68,8 @@ class LLMEngine:
             return
 
         with self.lock:
-            print(f"🚀 モデルロード中: {self.model_name} (4bit 量子化 on L4 GPU)...")
+            cache_info = f"（Google Drive保管先: {self.cache_dir}）" if self.cache_dir else "（ローカルキャッシュ）"
+            print(f"🚀 モデルロード中: {self.model_name} {cache_info} (4bit 量子化 on L4 GPU)...")
             bnb_config = BitsAndBytesConfig(
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
@@ -60,10 +79,12 @@ class LLMEngine:
 
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
+                cache_dir=self.cache_dir,
                 trust_remote_code=True
             )
             self.model = AutoModelForCausalLM.from_pretrained(
                 self.model_name,
+                cache_dir=self.cache_dir,
                 quantization_config=bnb_config,
                 device_map="auto",
                 trust_remote_code=True,
