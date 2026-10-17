@@ -17,7 +17,7 @@ Google Oneの最上位メンバーシップである **Google AI Ultra (20TB)** 
 | **チャットUI** | **指示書添付の画像（Gemini Advanced スタイル）を忠実に再現**。洗練されたグラデーション、サイドバー履歴、データ探索モーダル、フローティング入力バー、リアルタイムSSEストリーミング。 |
 | **GitHub連携** | PATトークン（`ghp_...`）を用いた自動コミット＆プッシュ。実行ログや最新コード、収集データを常にリポジトリへ同期。 |
 | **Google Drive連携** | `/content/drive/MyDrive/ADHDLab` へマウントし、チャットログ・生成メディア・データベースを永続化。世界公開時も実行ユーザー自身のGoogle Driveに安全保管。 |
-| **XServer連携** | `ColabTool` 内の `nanndemoya26.key`（SSH秘密鍵）を活用したXServerへのrsync/scp多重バックアップ。 |
+| **XServer連携** | `ColabTool/ADHDLab` 内の `nanndemoya26.key`（SSH公開鍵認証）を活用し、`nanndemoya26.xsrv.jp`（ポート `10022`）へ実行コード・実行ログ・データベースを二重保管＆ワンクリック復元。 |
 | **追加費用0円** | Google ColabとオープンソースLLM、無料Web検索・無料トンネル（Cloudflare Tunnel）を活用し、**追加費用0円** で運用可能。 |
 
 ---
@@ -73,3 +73,19 @@ ADHDLab/
    - 全シート共通で重複のない一連番号（No.1, No.2, ...）として自動採番。総合シート以外のシートでは飛び番になります。
 4. **自動エクスポート**:
    - SQLite上のリレーショナルデータを、指定の書式・カラー・列幅を保持したまま `ソース一覧.xlsx` にリアルタイム反映。
+
+---
+
+## 🖥️ XServer SSH連携仕様
+
+| 項目 | 設定値 / 仕様 |
+| :--- | :--- |
+| **サーバー（ホスト名）** | `nanndemoya26.xsrv.jp`（代替/初期: `sv17151.xserver.jp`） |
+| **ユーザー名** | `nanndemoya26` |
+| **接続ポート** | `10022` |
+| **認証方式** | 公開鍵認証（SSH秘密鍵: `nanndemoya26.key` / パーミッション `0600`） |
+| **ホスト鍵フィンガープリント** | ED25519: `SHA256:JW8I6QkDccWlz2UNvbmnKlZzVn9Dc3GL7JLAmUjSlt8`<br>ECDSA: `SHA256:zXNtCK5Z7dQBjU4s6c9yMikqoSoRCYd2JDg2GsE0srs`<br>RSA: `SHA256:Cc1r+bTUzhiIeDfpIKN++esLGJdZ/NZTXMG+woWIBjE` |
+| **リモート保管先** | `~/adhdlab_backup/` |
+| **保管対象** | ① `data/`（データベース、Excel、チャットログ、アップロードファイル）<br>② `adhdlab_latest.tar.gz`（実行コード、設定、ノートブック、ログを含む包括アーカイブ）<br>③ `archives/adhdlab_archive_YYYYMMDD_HHMMSS.tar.gz`（世代バックアップ） |
+| **復元機能** | Web UIまたはPythonコードから、XServer上の最新アーカイブを一括ダウンロード＆展開可能 |
+

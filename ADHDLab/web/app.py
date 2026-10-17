@@ -195,6 +195,30 @@ async def trigger_sync():
     return res
 
 
+@app.get("/api/xserver/info")
+async def get_xserver_info():
+    """XServer接続情報とnanndemoya26.key検出状態の取得"""
+    return storage_sync.get_xserver_info()
+
+
+@app.post("/api/xserver/test")
+async def test_xserver():
+    """XServerへのSSH接続疎通テスト"""
+    return storage_sync.test_xserver_connection()
+
+
+@app.post("/api/xserver/sync")
+async def sync_xserver():
+    """XServerへの手動バックアップ（コード、データ、ログ）"""
+    return storage_sync.sync_to_xserver()
+
+
+@app.post("/api/xserver/restore")
+async def restore_xserver():
+    """XServerからの手動復元"""
+    return storage_sync.restore_from_xserver()
+
+
 @app.get("/api/status")
 async def get_system_status():
     """システムステータス（GPU, メモリ, モデル情報）"""
@@ -206,13 +230,21 @@ async def get_system_status():
         vram_total = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         gpu_info = f"{gpu_name} (VRAM: {vram_alloc:.1f}GB / {vram_total:.1f}GB)"
 
+    xserver_info = storage_sync.get_xserver_info()
+
     return {
         "status": "online",
         "gpu": gpu_info,
         "model": llm_engine.model_name,
         "is_loaded": llm_engine.is_loaded,
         "google_ai_ultra": "GoogleOne AI Ultra 20TB連携対応",
-        "excel_path": EXCEL_PATH
+        "excel_path": EXCEL_PATH,
+        "xserver": {
+            "host": xserver_info["host"],
+            "port": xserver_info["port"],
+            "user": xserver_info["user"],
+            "key_detected": xserver_info["key_detected"]
+        }
     }
 
 

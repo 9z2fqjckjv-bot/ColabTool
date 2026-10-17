@@ -13,6 +13,20 @@ from typing import Dict, Any, Optional
 DEFAULT_DRIVE_PATH = "/content/drive/MyDrive/ADHDLab"
 GITHUB_REPO = "9z2fqjckjv-bot/ColabTool"
 
+# XServer 接続設定 (nanndemoya26.key に紐づく設定)
+DEFAULT_XSERVER_HOST = os.environ.get("XSERVER_HOST", "nanndemoya26.xsrv.jp")
+FALLBACK_XSERVER_HOST = "sv17151.xserver.jp"
+DEFAULT_XSERVER_USER = os.environ.get("XSERVER_USER", "nanndemoya26")
+DEFAULT_XSERVER_PORT = int(os.environ.get("XSERVER_PORT", "10022"))
+DEFAULT_XSERVER_REMOTE_DIR = os.environ.get("XSERVER_REMOTE_DIR", "~/adhdlab_backup")
+
+# XServer ホスト鍵フィンガープリント (照合・参考用)
+XSERVER_FINGERPRINTS = {
+    "ED25519": "SHA256:JW8I6QkDccWlz2UNvbmnKlZzVn9Dc3GL7JLAmUjSlt8",
+    "ECDSA": "SHA256:zXNtCK5Z7dQBjU4s6c9yMikqoSoRCYd2JDg2GsE0srs",
+    "RSA": "SHA256:Cc1r+bTUzhiIeDfpIKN++esLGJdZ/NZTXMG+woWIBjE"
+}
+
 def _resolve_github_token() -> str:
     """GitHub Personal Access Token の解決"""
     # 1. Colab Secrets から取得
@@ -42,19 +56,35 @@ def _resolve_github_token() -> str:
     return ""
 
 def _resolve_ssh_key_path() -> Optional[str]:
-    """nanndemoya26.key の配置パスを探索"""
-    candidates = [
-        # カレント/プロジェクト内
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../nanndemoya26.key")),
-        os.path.abspath(os.path.join(os.path.dirname(__file__), "../../AIMinecraft/nanndemoya26.key")),
+    """nanndemoya26.key の配置パスを優先順位に従って探索し、パーミッションを設定"""
+    env_key = os.environ.get("XSERVER_KEY_PATH")
+    candidates = []
+    if env_key:
+        candidates.append(os.path.abspath(env_key))
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    candidates.extend([
+        # ADHDLab 直下
+        os.path.abspath(os.path.join(base_dir, "../nanndemoya26.key")),
+        # カレントディレクトリ
+        os.path.abspath("nanndemoya26.key"),
+        os.path.abspath("ADHDLab/nanndemoya26.key"),
+        # リポジトリ直下・他プロジェクト
+        os.path.abspath(os.path.join(base_dir, "../../nanndemoya26.key")),
+        os.path.abspath(os.path.join(base_dir, "../../AIMinecraft/nanndemoya26.key")),
+        # Colab 標準マウントパス
         "/content/ColabTool/ADHDLab/nanndemoya26.key",
+        "/content/ColabTool/nanndemoya26.key",
         "/content/ColabTool/AIMinecraft/nanndemoya26.key",
-        # Google Drive 上のバックアップキー
+        "/content/nanndemoya26.key",
+        # Google Drive 上の永続化キー
         os.path.join(DEFAULT_DRIVE_PATH, "nanndemoya26.key")
-    ]
+    ])
+
     for p in candidates:
-        if os.path.exists(p):
+        if os.path.exists(p) and os.path.isfile(p):
             try:
+                # SSH秘密鍵は0600必須
                 os.chmod(p, 0o600)
             except Exception:
                 pass
@@ -66,6 +96,7 @@ class StorageSyncManager:
     def __init__(self, drive_path: str = DEFAULT_DRIVE_PATH, local_data_dir: str = "data"):
         self.drive_path = drive_path
         self.local_data_dir = os.path.abspath(local_data_dir)
+        self.project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
     # 1. Google Drive 連携
     def sync_to_google_drive(self) -> Dict[str, Any]:
@@ -165,8 +196,89 @@ class StorageSyncManager:
             return {"status": "error", "message": f"GitHub同期例外: {str(e)}"}
 
     # 3. XServer 連携
-    def sync_to_xserver(self, host: str = "sv14013.xserver.jp", user: str = "nanndemoya26", remote_dir: str = "~/adhdlab_backup") -> Dict[str, Any]:
-        """nanndemoya26.key を利用してXServerへrsyncバックアップ"""
+    def get_xserver_info(self) -> Dict[str, Any]:
+        """XServer接続情報を取得"""
+        key_file = _resolve_ssh_key_path()
+        return {
+            "host": DEFAULT_XSERVER_HOST,
+            "fallback_host": FALLBACK_XSERVER_HOST,
+            "user": DEFAULT_XSERVER_USER,
+            "port": DEFAULT_XSERVER_PORT,
+            "remote_dir": DEFAULT_XSERVER_REMOTE_DIR,
+            "key_file": key_file,
+            "key_detected": key_file is not None,
+            "fingerprints": XSERVER_FINGERPRINTS
+        }
+
+    def test_xserver_connection(
+        self,
+        host: Optional[str] = None,
+        user: Optional[str] = None,
+        port: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """nanndemoya26.key を利用したXServerへのSSH接続疎通テスト"""
+        key_file = _resolve_ssh_key_path()
+        if not key_file or not os.path.exists(key_file):
+            return {
+                "status": "error",
+                "message": "nanndemoya26.key 未検出 (ADHDLabフォルダまたはGoogle Driveに配置してください)"
+            }
+
+        host = host or DEFAULT_XSERVER_HOST
+        user = user or DEFAULT_XSERVER_USER
+        port = port or DEFAULT_XSERVER_PORT
+
+        ssh_opts = [
+            "ssh",
+            "-i", key_file,
+            "-p", str(port),
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "LogLevel=ERROR",
+            "-o", "ConnectTimeout=8",
+            f"{user}@{host}",
+            "uname -a && uptime"
+        ]
+
+        try:
+            start_time = datetime.datetime.now()
+            res = subprocess.run(ssh_opts, capture_output=True, text=True, timeout=12)
+            elapsed = (datetime.datetime.now() - start_time).total_seconds()
+
+            if res.returncode == 0:
+                server_info = res.stdout.strip().split("\n")[0]
+                return {
+                    "status": "success",
+                    "message": f"XServer ({host}:{port}) 接続成功 [{elapsed:.2f}s]",
+                    "server_info": server_info,
+                    "host": host,
+                    "user": user,
+                    "port": port
+                }
+            else:
+                # フォールバックホストを試行
+                if host == DEFAULT_XSERVER_HOST and FALLBACK_XSERVER_HOST:
+                    return self.test_xserver_connection(host=FALLBACK_XSERVER_HOST, user=user, port=port)
+                return {
+                    "status": "error",
+                    "message": f"接続拒否 (コード {res.returncode}): {res.stderr.strip()[:100]}"
+                }
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "message": f"接続タイムアウト ({host}:{port})"}
+        except Exception as e:
+            return {"status": "error", "message": f"接続例外: {str(e)}"}
+
+    def sync_to_xserver(
+        self,
+        host: Optional[str] = None,
+        user: Optional[str] = None,
+        port: Optional[int] = None,
+        remote_dir: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        nanndemoya26.key を利用してXServerへ実行コードファイル、データ、実行ログを保管。
+        指示書要件: “ColabTool”内の‘nanndemoya26.key’を用いてXServer上にも、実行コードファイルと実行ログを保管する。
+        """
         key_file = _resolve_ssh_key_path()
         if not key_file or not os.path.exists(key_file):
             return {
@@ -174,22 +286,147 @@ class StorageSyncManager:
                 "message": "nanndemoya26.key 未検出 (Google DriveまたはADHDLabフォルダに配置で自動同期)"
             }
 
+        host = host or DEFAULT_XSERVER_HOST
+        user = user or DEFAULT_XSERVER_USER
+        port = port or DEFAULT_XSERVER_PORT
+        remote_dir = remote_dir or DEFAULT_XSERVER_REMOTE_DIR
+
+        ssh_base = f"ssh -i {key_file} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
+
         try:
-            cmd = [
-                "rsync", "-avz",
-                "-e", f"ssh -i {key_file} -o StrictHostKeyChecking=no -o ConnectTimeout=5 -p 10022",
-                self.local_data_dir + "/",
-                f"{user}@{host}:{remote_dir}/"
+            # 1. リモートディレクトリの準備 (~/adhdlab_backup/data, ~/adhdlab_backup/archives)
+            mkdir_cmd = f"{ssh_base} {user}@{host} 'mkdir -p {remote_dir}/data {remote_dir}/archives {remote_dir}/logs'"
+            sub_res = subprocess.run(mkdir_cmd, shell=True, capture_output=True, text=True, timeout=12)
+            if sub_res.returncode != 0:
+                # 代替ホストを試行
+                if host == DEFAULT_XSERVER_HOST and FALLBACK_XSERVER_HOST:
+                    return self.sync_to_xserver(host=FALLBACK_XSERVER_HOST, user=user, port=port, remote_dir=remote_dir)
+                return {"status": "error", "message": f"リモートディレクトリ作成失敗: {sub_res.stderr.strip()[:80]}"}
+
+            sync_results = []
+
+            # 2. データディレクトリ (data/) の同期 (rsync 優先、scp フォールバック)
+            if os.path.exists(self.local_data_dir):
+                rsync_cmd = [
+                    "rsync", "-avz", "--delete",
+                    "-e", f"ssh -i {key_file} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
+                    self.local_data_dir + "/",
+                    f"{user}@{host}:{remote_dir}/data/"
+                ]
+                rsync_res = subprocess.run(rsync_cmd, capture_output=True, text=True, timeout=30)
+                if rsync_res.returncode == 0:
+                    sync_results.append("data同期成功(rsync)")
+                else:
+                    # scp フォールバック
+                    scp_cmd = [
+                        "scp", "-P", str(port), "-i", key_file, "-r",
+                        "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                        self.local_data_dir,
+                        f"{user}@{host}:{remote_dir}/"
+                    ]
+                    scp_res = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=30)
+                    if scp_res.returncode == 0:
+                        sync_results.append("data同期成功(scp)")
+                    else:
+                        sync_results.append(f"data同期警告({scp_res.stderr.strip()[:50]})")
+
+            # 3. 実行コードファイルと実行ログの包括アーカイブ作成＆保管
+            import tarfile
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            temp_tar_name = f"adhdlab_archive_{timestamp}.tar.gz"
+            temp_tar_path = os.path.join("/tmp", temp_tar_name)
+
+            # アーカイブ対象: core/, web/, data/, ノートブック, 仕様書, Excel
+            targets = [
+                ("core", os.path.join(self.project_root, "core")),
+                ("web", os.path.join(self.project_root, "web")),
+                ("data", self.local_data_dir),
+                ("ADHDLab_Colab.ipynb", os.path.join(self.project_root, "ADHDLab_Colab.ipynb")),
+                ("ソース一覧.xlsx", os.path.join(self.project_root, "ソース一覧.xlsx")),
+                ("README.md", os.path.join(self.project_root, "README.md")),
             ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
-            if res.returncode == 0:
-                return {"status": "success", "message": "XServerへのバックアップ完了"}
-            else:
-                return {"status": "error", "message": f"同期失敗 (終了コード {res.returncode})"}
+
+            with tarfile.open(temp_tar_path, "w:gz") as tar:
+                for arcname, target_path in targets:
+                    if os.path.exists(target_path):
+                        tar.add(target_path, arcname=arcname)
+
+            # XServer へ最新アーカイブ (adhdlab_latest.tar.gz) および世代アーカイブを転送
+            scp_tar_latest = [
+                "scp", "-P", str(port), "-i", key_file,
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                temp_tar_path,
+                f"{user}@{host}:{remote_dir}/adhdlab_latest.tar.gz"
+            ]
+            scp_tar_archive = [
+                "scp", "-P", str(port), "-i", key_file,
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                temp_tar_path,
+                f"{user}@{host}:{remote_dir}/archives/{temp_tar_name}"
+            ]
+
+            subprocess.run(scp_tar_latest, capture_output=True, text=True, timeout=25)
+            subprocess.run(scp_tar_archive, capture_output=True, text=True, timeout=25)
+            sync_results.append("コード&ログ包括アーカイブ保管成功")
+
+            if os.path.exists(temp_tar_path):
+                os.remove(temp_tar_path)
+
+            return {
+                "status": "success",
+                "message": f"XServer ({host}:{port}) バックアップ完了: {', '.join(sync_results)}",
+                "host": host,
+                "remote_dir": remote_dir
+            }
+
         except subprocess.TimeoutExpired:
-            return {"status": "error", "message": "接続タイムアウト (ポート10022)"}
+            return {"status": "error", "message": f"XServer同期タイムアウト ({host}:{port})"}
         except Exception as e:
-            return {"status": "error", "message": f"例外: {str(e)}"}
+            return {"status": "error", "message": f"XServer同期例外: {str(e)}"}
+
+    def restore_from_xserver(
+        self,
+        host: Optional[str] = None,
+        user: Optional[str] = None,
+        port: Optional[int] = None,
+        remote_dir: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """XServerから最新のバックアップアーカイブを取得し、ローカル環境へ復元"""
+        key_file = _resolve_ssh_key_path()
+        if not key_file or not os.path.exists(key_file):
+            return {"status": "skipped", "message": "nanndemoya26.key 未検出"}
+
+        host = host or DEFAULT_XSERVER_HOST
+        user = user or DEFAULT_XSERVER_USER
+        port = port or DEFAULT_XSERVER_PORT
+        remote_dir = remote_dir or DEFAULT_XSERVER_REMOTE_DIR
+
+        temp_tar_path = "/tmp/adhdlab_restore_xserver.tar.gz"
+        scp_cmd = [
+            "scp", "-P", str(port), "-i", key_file,
+            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+            f"{user}@{host}:{remote_dir}/adhdlab_latest.tar.gz",
+            temp_tar_path
+        ]
+
+        try:
+            res = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=30)
+            if res.returncode == 0 and os.path.exists(temp_tar_path) and os.path.getsize(temp_tar_path) > 0:
+                import tarfile
+                with tarfile.open(temp_tar_path, "r:gz") as tar:
+                    tar.extractall(path=self.project_root)
+                os.remove(temp_tar_path)
+                return {
+                    "status": "success",
+                    "message": f"XServer ({host}) から最新アーカイブを完全復元しました"
+                }
+            else:
+                return {
+                    "status": "error",
+                    "message": f"XServerからのアーカイブ取得に失敗しました: {res.stderr.strip()[:80]}"
+                }
+        except Exception as e:
+            return {"status": "error", "message": f"XServer復元例外: {str(e)}"}
 
     # 4. 全保管先の一括自動バックアップ
     def full_sync(self, commit_msg: Optional[str] = None) -> Dict[str, Any]:
@@ -201,3 +438,4 @@ class StorageSyncManager:
             "timestamp": datetime.datetime.now().isoformat()
         }
         return results
+

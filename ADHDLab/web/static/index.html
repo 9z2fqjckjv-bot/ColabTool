@@ -707,6 +707,10 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
           <span>データ探索</span>
         </button>
+        <button class="btn-action" onclick="openXServerModal()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+          <span>XServer連携</span>
+        </button>
         <button class="btn-action" onclick="triggerWebCollection()">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
           <span>Web自動収集</span>
@@ -818,6 +822,71 @@
           </thead>
           <tbody id="sourcesTableBody"></tbody>
         </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- XServer 連携設定・同期モーダル -->
+  <div class="modal-overlay" id="xserverModal">
+    <div class="modal-window" style="max-width: 650px;">
+      <div class="modal-header">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span style="font-size:20px;">🖥️</span>
+          <h2 style="font-size:18px; font-weight:700;">XServer レンタルサーバー SSH連携設定</h2>
+        </div>
+        <button class="icon-btn" onclick="closeXServerModal()">✕</button>
+      </div>
+      <div class="modal-body" style="padding: 20px;">
+        <div style="background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; padding:16px; margin-bottom:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+            <span style="font-weight:600; color:#334155; font-size:14px;">SSHアカウント情報</span>
+            <span id="xserverKeyBadge" style="font-size:12px; padding:4px 10px; border-radius:20px; font-weight:600; background:#fee2e2; color:#b91c1c;">鍵確認中...</span>
+          </div>
+          <table style="width:100%; font-size:13px; border-collapse:collapse;">
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:8px 0; color:#64748b; width:130px;">サーバー (ホスト名)</td>
+              <td style="padding:8px 0; font-weight:600; color:#1e293b;">
+                <span id="xsHost">nanndemoya26.xsrv.jp</span>
+                <span style="color:#94a3b8; font-weight:normal; font-size:11px;"> (sv17151.xserver.jp)</span>
+              </td>
+            </tr>
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:8px 0; color:#64748b;">ユーザー名</td>
+              <td style="padding:8px 0; font-weight:600; color:#1e293b;" id="xsUser">nanndemoya26</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:8px 0; color:#64748b;">接続ポート</td>
+              <td style="padding:8px 0; font-weight:600; color:#1e293b;" id="xsPort">10022</td>
+            </tr>
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:8px 0; color:#64748b;">認証方式</td>
+              <td style="padding:8px 0; color:#1e293b;">公開鍵認証 (<code style="background:#e2e8f0; padding:2px 6px; border-radius:4px; font-size:12px;">nanndemoya26.key</code>)</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 0; color:#64748b;">リモート保管先</td>
+              <td style="padding:8px 0; color:#1e293b;"><code id="xsRemoteDir" style="background:#e2e8f0; padding:2px 6px; border-radius:4px; font-size:12px;">~/adhdlab_backup</code></td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- アクションボタン群 -->
+        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-bottom:16px;">
+          <button class="btn-action" style="justify-content:center; padding:10px; border-radius:8px;" onclick="testSSHConnection()">
+            <span>🔍 接続テスト</span>
+          </button>
+          <button class="btn-action btn-primary" style="justify-content:center; padding:10px; border-radius:8px;" onclick="syncToXServerNow()">
+            <span>🚀 XServerへ同期</span>
+          </button>
+          <button class="btn-action" style="justify-content:center; padding:10px; border-radius:8px; border-color:#cbd5e1;" onclick="restoreFromXServerNow()">
+            <span>📥 XServerから復元</span>
+          </button>
+        </div>
+
+        <!-- 実行ログコンソール -->
+        <div style="margin-top:10px;">
+          <div style="font-size:12px; font-weight:600; color:#64748b; margin-bottom:6px;">実行ログ・ステータス</div>
+          <pre id="xserverConsole" style="background:#0f172a; color:#38bdf8; font-family:monospace; font-size:12px; padding:12px; border-radius:8px; height:120px; overflow-y:auto; margin:0; white-space:pre-wrap;">待機中: [接続テスト] または [XServerへ同期] をクリックしてください。</pre>
+        </div>
       </div>
     </div>
   </div>
@@ -1061,12 +1130,100 @@
       }
     }
 
+    // XServer モーダル開閉
+    async function openXServerModal() {
+      document.getElementById('xserverModal').classList.add('active');
+      await loadXServerInfo();
+    }
+
+    function closeXServerModal() {
+      document.getElementById('xserverModal').classList.remove('active');
+    }
+
+    async function loadXServerInfo() {
+      try {
+        const res = await fetch('/api/xserver/info');
+        const data = await res.json();
+        document.getElementById('xsHost').innerText = data.host;
+        document.getElementById('xsUser').innerText = data.user;
+        document.getElementById('xsPort').innerText = data.port;
+        document.getElementById('xsRemoteDir').innerText = data.remote_dir;
+
+        const badge = document.getElementById('xserverKeyBadge');
+        if (data.key_detected) {
+          badge.innerText = '🟢 nanndemoya26.key 検出済み';
+          badge.style.background = '#dcfce7';
+          badge.style.color = '#15803d';
+        } else {
+          badge.innerText = '🔴 nanndemoya26.key 未検出';
+          badge.style.background = '#fee2e2';
+          badge.style.color = '#b91c1c';
+        }
+      } catch (e) {
+        console.error('XServer情報取得エラー:', e);
+      }
+    }
+
+    // XServer 接続テスト
+    async function testSSHConnection() {
+      const consoleBox = document.getElementById('xserverConsole');
+      consoleBox.innerText = '🔄 XServer (nanndemoya26.xsrv.jp:10022) へのSSH接続疎通テストを実行中...';
+      try {
+        const res = await fetch('/api/xserver/test', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          consoleBox.innerText = `✅ [接続成功]\n- メッセージ: ${data.message}\n- ホスト: ${data.host}:${data.port}\n- ユーザー: ${data.user}\n- サーバー情報:\n  ${data.server_info}`;
+        } else {
+          consoleBox.innerText = `❌ [接続失敗]\n${data.message}`;
+        }
+      } catch (e) {
+        consoleBox.innerText = `⚠️ 通信エラー: ${e.message}`;
+      }
+    }
+
+    // XServer 同期
+    async function syncToXServerNow() {
+      const consoleBox = document.getElementById('xserverConsole');
+      consoleBox.innerText = '🚀 XServerへデータおよび実行コード・ログの包括バックアップを送信中...';
+      try {
+        const res = await fetch('/api/xserver/sync', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          consoleBox.innerText = `🎉 [同期完了]\n- ${data.message}\n- 保存先: ${data.remote_dir} @ ${data.host}`;
+        } else {
+          consoleBox.innerText = `⚠️ [同期ステータス: ${data.status}]\n${data.message}`;
+        }
+      } catch (e) {
+        consoleBox.innerText = `⚠️ エラー: ${e.message}`;
+      }
+    }
+
+    // XServer 復元
+    async function restoreFromXServerNow() {
+      if (!confirm('XServer上の最新アーカイブからローカル環境へ復元しますか？（現在のローカルファイルが上書きされます）')) return;
+      const consoleBox = document.getElementById('xserverConsole');
+      consoleBox.innerText = '📥 XServerから最新アーカイブを取得・展開中...';
+      try {
+        const res = await fetch('/api/xserver/restore', { method: 'POST' });
+        const data = await res.json();
+        if (data.status === 'success') {
+          consoleBox.innerText = `✅ [復元完了]\n${data.message}`;
+          alert('復元が完了しました。ページを再読み込みします。');
+          location.reload();
+        } else {
+          consoleBox.innerText = `❌ [復元失敗]\n${data.message}`;
+        }
+      } catch (e) {
+        consoleBox.innerText = `⚠️ エラー: ${e.message}`;
+      }
+    }
+
     // 同期・保存トリガー
     async function triggerSync() {
       try {
         const res = await fetch('/api/sync', {method: 'POST'});
         const data = await res.json();
-        alert('同期結果:\n- Drive: ' + data.google_drive.message + '\n- GitHub: ' + data.github.message + '\n- XServer: ' + data.xserver.message);
+        alert('【包括的同期結果】\n- Google Drive: ' + data.google_drive.message + '\n- GitHub: ' + data.github.message + '\n- XServer: ' + data.xserver.message);
       } catch (e) {
         alert('同期エラー: ' + e.message);
       }
