@@ -1,0 +1,1091 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ADHDLab - Google Colab AI Specialist (Gemini Style)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    :root {
+      --bg-gradient: radial-gradient(circle at 50% 20%, #e0f2fe 0%, #f0f9ff 35%, #ffffff 80%);
+      --sidebar-bg: #f8fafc;
+      --sidebar-border: #e2e8f0;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --card-bg: rgba(255, 255, 255, 0.85);
+      --card-border: #e2e8f0;
+      --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+      --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+      --shadow-float: 0 12px 32px rgba(37, 99, 235, 0.08), 0 4px 12px rgba(0, 0, 0, 0.05);
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 24px;
+      --radius-full: 9999px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: 'Outfit', 'Noto Sans JP', 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg-gradient);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* === サイドバー === */
+    .sidebar {
+      width: 280px;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 20;
+      position: relative;
+    }
+
+    .sidebar.collapsed {
+      width: 68px;
+    }
+
+    .sidebar-header {
+      padding: 18px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+    }
+
+    .logo-sparkle {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #ec4899 100%);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 700;
+      font-size: 15px;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.35);
+    }
+
+    .logo-text {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #1e3a8a, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.5px;
+    }
+
+    .sidebar.collapsed .logo-text,
+    .sidebar.collapsed .sidebar-label,
+    .sidebar.collapsed .history-title,
+    .sidebar.collapsed .account-info,
+    .sidebar.collapsed .category-badge {
+      display: none;
+    }
+
+    .icon-btn {
+      background: transparent;
+      border: none;
+      padding: 8px;
+      border-radius: var(--radius-sm);
+      cursor: pointer;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s ease;
+    }
+
+    .icon-btn:hover {
+      background: #e2e8f0;
+      color: var(--text-main);
+    }
+
+    .new-chat-btn {
+      margin: 8px 16px 16px;
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      padding: 10px 16px;
+      border-radius: var(--radius-full);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 500;
+      font-size: 14px;
+      color: var(--text-main);
+      cursor: pointer;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.2s ease;
+    }
+
+    .new-chat-btn:hover {
+      background: #f1f5f9;
+      box-shadow: var(--shadow-md);
+      transform: translateY(-1px);
+    }
+
+    .sidebar-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 12px;
+    }
+
+    .sidebar-section {
+      margin-bottom: 20px;
+    }
+
+    .sidebar-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 6px 12px;
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 9px 12px;
+      border-radius: var(--radius-sm);
+      color: var(--text-main);
+      font-size: 13.5px;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background 0.15s ease;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .nav-item:hover, .nav-item.active {
+      background: #e2e8f0;
+      color: var(--primary);
+    }
+
+    .nav-item svg {
+      flex-shrink: 0;
+      width: 18px;
+      height: 18px;
+      color: var(--text-muted);
+    }
+
+    .nav-item:hover svg, .nav-item.active svg {
+      color: var(--primary);
+    }
+
+    .category-badge {
+      margin-left: auto;
+      background: #e0e7ff;
+      color: #3730a3;
+      font-size: 10px;
+      padding: 2px 7px;
+      border-radius: 9999px;
+      font-weight: 600;
+    }
+
+    .sidebar-footer {
+      padding: 14px 16px;
+      border-top: 1px solid var(--sidebar-border);
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .avatar-circle {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .account-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .account-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* === メインコンテンツ === */
+    .main-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      position: relative;
+      background: transparent;
+    }
+
+    /* ヘッダー */
+    .top-header {
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(226, 232, 240, 0.6);
+      background: rgba(255, 255, 255, 0.6);
+      backdrop-filter: blur(12px);
+      z-index: 10;
+    }
+
+    .model-selector-pill {
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      padding: 6px 14px;
+      border-radius: var(--radius-full);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      box-shadow: var(--shadow-sm);
+      cursor: pointer;
+    }
+
+    .model-selector-pill select {
+      border: none;
+      background: transparent;
+      outline: none;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-main);
+      cursor: pointer;
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn-action {
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      padding: 7px 14px;
+      border-radius: var(--radius-full);
+      font-size: 12.5px;
+      font-weight: 500;
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: var(--shadow-sm);
+      transition: all 0.15s ease;
+    }
+
+    .btn-action:hover {
+      background: #f8fafc;
+      border-color: #cbd5e1;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+
+    /* チャットスクロールエリア */
+    .chat-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 24px 20px 160px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .chat-content-width {
+      width: 100%;
+      max-width: 820px;
+    }
+
+    /* ウェルカム画面 */
+    .welcome-container {
+      margin-top: 60px;
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .welcome-title {
+      font-size: 32px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #1e293b, #3b82f6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.5px;
+    }
+
+    .welcome-subtitle {
+      font-size: 15px;
+      color: var(--text-muted);
+      max-width: 580px;
+      line-height: 1.6;
+    }
+
+    .quick-prompts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 12px;
+      width: 100%;
+      max-width: 720px;
+      margin-top: 10px;
+    }
+
+    .prompt-card {
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid var(--card-border);
+      padding: 14px 18px;
+      border-radius: var(--radius-md);
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .prompt-card:hover {
+      background: #ffffff;
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-md);
+      border-color: #bfdbfe;
+    }
+
+    .prompt-card-icon {
+      font-size: 20px;
+      margin-bottom: 6px;
+    }
+
+    .prompt-card-title {
+      font-size: 13.5px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .prompt-card-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* メッセージ吹き出し */
+    .message-row {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 28px;
+      width: 100%;
+    }
+
+    .message-row.user {
+      justify-content: flex-end;
+    }
+
+    .message-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .message-avatar.ai {
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      color: white;
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    }
+
+    .message-bubble {
+      max-width: 720px;
+      padding: 14px 18px;
+      border-radius: var(--radius-md);
+      font-size: 14.5px;
+      line-height: 1.65;
+    }
+
+    .message-row.user .message-bubble {
+      background: #eff6ff;
+      border: 1px solid #dbeafe;
+      color: #1e3a8a;
+      border-radius: 20px 20px 4px 20px;
+    }
+
+    .message-row.assistant .message-bubble {
+      background: #ffffff;
+      border: 1px solid var(--card-border);
+      color: var(--text-main);
+      border-radius: 4px 20px 20px 20px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .rag-badge-box {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: #f8fafc;
+      border-left: 3px solid #3b82f6;
+      border-radius: 6px;
+      font-size: 12px;
+      color: #475569;
+    }
+
+    /* フローティング入力バー（Gemini Style） */
+    .input-dock {
+      position: absolute;
+      bottom: 24px;
+      left: 0;
+      right: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 20px;
+      pointer-events: none;
+    }
+
+    .input-bar-container {
+      width: 100%;
+      max-width: 780px;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(16px);
+      border: 1px solid #cbd5e1;
+      border-radius: var(--radius-lg);
+      padding: 10px 16px;
+      box-shadow: var(--shadow-float);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      pointer-events: auto;
+      transition: all 0.2s ease;
+    }
+
+    .input-bar-container:focus-within {
+      border-color: #3b82f6;
+      box-shadow: 0 12px 36px rgba(59, 130, 246, 0.16);
+    }
+
+    .input-dock textarea {
+      flex: 1;
+      border: none;
+      outline: none;
+      background: transparent;
+      resize: none;
+      height: 28px;
+      max-height: 140px;
+      font-family: inherit;
+      font-size: 15px;
+      color: var(--text-main);
+      line-height: 28px;
+    }
+
+    .send-btn {
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: #e2e8f0;
+      border: none;
+      color: #94a3b8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .send-btn.active {
+      background: var(--primary);
+      color: white;
+      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+    }
+
+    .input-tags {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+      pointer-events: auto;
+    }
+
+    .tag-pill {
+      font-size: 11.5px;
+      padding: 4px 10px;
+      border-radius: var(--radius-full);
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid #e2e8f0;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .tag-pill.active {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: var(--primary);
+      font-weight: 500;
+    }
+
+    /* モーダル（データベース探索） */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(15, 23, 42, 0.4);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 50;
+    }
+
+    .modal-overlay.active {
+      display: flex;
+    }
+
+    .modal-window {
+      background: #ffffff;
+      width: 90%;
+      max-width: 960px;
+      height: 80vh;
+      border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-lg);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .modal-header {
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .modal-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px 24px;
+    }
+
+    .sources-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .sources-table th, .sources-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f1f5f9;
+      text-align: left;
+    }
+
+    .sources-table th {
+      background: #f8fafc;
+      font-weight: 600;
+      color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- サイドバー -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <div class="logo-area" onclick="newChat()">
+        <div class="logo-sparkle">✦</div>
+        <div class="logo-text">ADHDLab</div>
+      </div>
+      <button class="icon-btn" onclick="toggleSidebar()" title="サイドバー切替">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+    </div>
+
+    <button class="new-chat-btn" onclick="newChat()">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      <span>チャットを新規作成</span>
+    </button>
+
+    <div class="sidebar-scroll">
+      <!-- データベース探索 -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">ADHD データベース</div>
+        <div class="nav-item" onclick="openDatabaseModal('総合')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          <span>総合エビデンス</span>
+          <span class="category-badge">統一番号</span>
+        </div>
+        <div class="nav-item" onclick="openDatabaseModal('医療機関')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          <span>医療機関・専門医</span>
+        </div>
+        <div class="nav-item" onclick="openDatabaseModal('公的機関')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v14M21 7v14M6 11v6M10 11v6M14 11v6M18 11v6M12 3l9 4H3l9-4z"/></svg>
+          <span>公的機関・支援指針</span>
+        </div>
+        <div class="nav-item" onclick="openDatabaseModal('SNS')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"/></svg>
+          <span>SNS・実践ハック</span>
+        </div>
+        <div class="nav-item" onclick="openDatabaseModal('Blog')">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span>当事者ブログ・note</span>
+        </div>
+      </div>
+
+      <!-- チャット履歴 -->
+      <div class="sidebar-section">
+        <div class="sidebar-label">最近のチャット</div>
+        <div id="sessionHistoryList"></div>
+      </div>
+    </div>
+
+    <!-- フッター -->
+    <div class="sidebar-footer">
+      <div class="avatar-circle">L4</div>
+      <div class="account-info">
+        <div class="account-title">Google Colab L4</div>
+        <div class="account-sub" id="statusGpuText">Qwen 2.5 (14B) 稼働中</div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- メインエリア -->
+  <main class="main-container">
+    <header class="top-header">
+      <div class="model-selector-pill">
+        <span>🤖</span>
+        <select id="modelSelect">
+          <option value="Qwen/Qwen2.5-14B-Instruct">Qwen 2.5 (14B) - 推奨・高精度</option>
+          <option value="Qwen/Qwen2.5-7B-Instruct">Qwen 2.5 (7B) - 高速モード</option>
+        </select>
+      </div>
+
+      <div class="header-actions">
+        <button class="btn-action" onclick="openDatabaseModal('総合')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+          <span>データ探索</span>
+        </button>
+        <button class="btn-action" onclick="triggerWebCollection()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span>Web自動収集</span>
+        </button>
+        <button class="btn-action btn-primary" onclick="triggerSync()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/></svg>
+          <span>同期・保存</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- チャットメッセージエリア -->
+    <div class="chat-scroll" id="chatScroll">
+      <div class="chat-content-width" id="chatContent">
+
+        <!-- ウェルカム画面 -->
+        <div class="welcome-container" id="welcomeView">
+          <h1 class="welcome-title">ADHDLab の活用方法をご紹介</h1>
+          <p class="welcome-subtitle">
+            Google Colab L4 GPU と Qwen 2.5 (14B) を搭載したADHD特化型AIです。<br>
+            先延ばし、集中力の乱れ、タスクの分解、自己理解を神経科学とエビデンスで支援します。
+          </p>
+
+          <div class="quick-prompts">
+            <div class="prompt-card" onclick="sendQuickPrompt('大きな仕事があって先延ばしにしてしまいます。最初の一歩を極限まで小さく分解してください。')">
+              <div class="prompt-card-icon">🎯</div>
+              <div class="prompt-card-title">タスクを極小に分解する</div>
+              <div class="prompt-card-desc">先延ばしを防ぐ30秒スタート法</div>
+            </div>
+            <div class="prompt-card" onclick="sendQuickPrompt('今、集中力が完全に切れてしまいました。脳の疲労をリセットする休憩方法を教えてください。')">
+              <div class="prompt-card-icon">🧘</div>
+              <div class="prompt-card-title">集中力の回復とリセット</div>
+              <div class="prompt-card-desc">ドーパミンと実行機能のケア</div>
+            </div>
+            <div class="prompt-card" onclick="sendQuickPrompt('ADHDの最新の医療ガイドラインに基づく診断や治療の基礎知識を教えてください。')">
+              <div class="prompt-card-icon">📖</div>
+              <div class="prompt-card-title">公的・医療エビデンス確認</div>
+              <div class="prompt-card-desc">学会・公的指針ナレッジベース参照</div>
+            </div>
+            <div class="prompt-card" onclick="sendQuickPrompt('部屋やデスクの片付けがどうしても苦手です。ADHDの特性に合った整理ハックを提案してください。')">
+              <div class="prompt-card-icon">🧹</div>
+              <div class="prompt-card-title">片付け・整理ライフハック</div>
+              <div class="prompt-card-desc">視覚的収納とルーティン化</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- メッセージ群がここに挿入される -->
+        <div id="messagesList"></div>
+
+      </div>
+    </div>
+
+    <!-- 入力ドック -->
+    <div class="input-dock">
+      <div class="input-bar-container">
+        <button class="icon-btn" onclick="document.getElementById('fileUploadInput').click()" title="ファイル/メディア添付">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <input type="file" id="fileUploadInput" style="display:none;" onchange="handleFileUpload(event)">
+
+        <textarea id="promptInput" placeholder="ADHDLab に相談する（例：やることが多すぎてパニックです...）" rows="1" onkeydown="handleKeyDown(event)"></textarea>
+
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+        </button>
+      </div>
+
+      <div class="input-tags">
+        <div class="tag-pill active" id="ragToggle" onclick="toggleRAG()">
+          <span>📚 RAGエビデンス参照: ON</span>
+        </div>
+        <div class="tag-pill">
+          <span>🔒 Google AI Ultra (20TB) 永続化</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- データベース探索モーダル -->
+  <div class="modal-overlay" id="databaseModal">
+    <div class="modal-window">
+      <div class="modal-header">
+        <h2 style="font-size:18px; font-weight:700;">📊 ADHDLab ナレッジベース (ソース一覧.xlsx 準拠)</h2>
+        <button class="icon-btn" onclick="closeDatabaseModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex; gap:10px; margin-bottom:16px;">
+          <input type="text" id="sourceSearchInput" placeholder="キーワード検索 (例: 診断, ライフハック, 集中力)" style="flex:1; padding:8px 12px; border:1px solid #cbd5e1; border-radius:8px;" oninput="filterSources()">
+          <select id="sourceCategoryFilter" style="padding:8px 12px; border:1px solid #cbd5e1; border-radius:8px;" onchange="filterSources()">
+            <option value="">すべてのシート</option>
+            <option value="医療機関">医療機関</option>
+            <option value="公的機関">公的機関</option>
+            <option value="SNS">SNS</option>
+            <option value="Blog">Blog</option>
+            <option value="Other">Other</option>
+          </select>
+        </div>
+        <table class="sources-table">
+          <thead>
+            <tr>
+              <th style="width:70px;">No</th>
+              <th style="width:100px;">シート</th>
+              <th>サイト/サービス名</th>
+              <th>作成者/投稿者</th>
+              <th style="width:110px;">日付</th>
+              <th>要約・エビデンス</th>
+            </tr>
+          </thead>
+          <tbody id="sourcesTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentSessionId = 'session_' + Date.now();
+    let useRAG = true;
+
+    // サイドバー折りたたみ
+    function toggleSidebar() {
+      document.getElementById('sidebar').classList.toggle('collapsed');
+    }
+
+    // 新規チャット
+    function newChat() {
+      currentSessionId = 'session_' + Date.now();
+      document.getElementById('messagesList').innerHTML = '';
+      document.getElementById('welcomeView').style.display = 'flex';
+      loadSessions();
+    }
+
+    // クイックプロンプト
+    function sendQuickPrompt(text) {
+      document.getElementById('promptInput').value = text;
+      sendMessage();
+    }
+
+    function toggleRAG() {
+      useRAG = !useRAG;
+      const el = document.getElementById('ragToggle');
+      el.classList.toggle('active', useRAG);
+      el.innerHTML = useRAG ? '<span>📚 RAGエビデンス参照: ON</span>' : '<span>📚 RAGエビデンス参照: OFF</span>';
+    }
+
+    // テキストエリアの自動伸縮
+    const promptInput = document.getElementById('promptInput');
+    promptInput.addEventListener('input', () => {
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 120) + 'px';
+      document.getElementById('sendBtn').classList.toggle('active', promptInput.value.trim().length > 0);
+    });
+
+    function handleKeyDown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    }
+
+    // メッセージ送信
+    async function sendMessage() {
+      const message = promptInput.value.trim();
+      if (!message) return;
+
+      document.getElementById('welcomeView').style.display = 'none';
+      appendMessage('user', message);
+      promptInput.value = '';
+      promptInput.style.height = '28px';
+      document.getElementById('sendBtn').classList.remove('active');
+
+      const model = document.getElementById('modelSelect').value;
+      const aiBubble = appendMessage('assistant', '考え中...');
+
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            message: message,
+            session_id: currentSessionId,
+            model: model,
+            use_rag: useRAG
+          })
+        });
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        aiBubble.innerHTML = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunkStr = decoder.decode(value);
+          const lines = chunkStr.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = JSON.parse(line.substring(6));
+              if (data.chunk) {
+                fullText += data.chunk;
+                aiBubble.innerHTML = marked.parse(fullText);
+                scrollToBottom();
+              }
+              if (data.done && data.rag) {
+                const ragBox = document.createElement('div');
+                ragBox.className = 'rag-badge-box';
+                ragBox.innerHTML = `<strong>📚 引用・参照エビデンス:</strong><br>${data.rag.replace(/\n/g, '<br>')}`;
+                aiBubble.appendChild(ragBox);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        aiBubble.innerText = 'エラーが発生しました: ' + err.message;
+      }
+      loadSessions();
+    }
+
+    function appendMessage(role, text) {
+      const messagesList = document.getElementById('messagesList');
+      const row = document.createElement('div');
+      row.className = `message-row ${role}`;
+
+      const avatar = document.createElement('div');
+      avatar.className = `message-avatar ${role === 'user' ? 'user' : 'ai'}`;
+      avatar.innerText = role === 'user' ? 'U' : '✦';
+
+      const bubble = document.createElement('div');
+      bubble.className = 'message-bubble';
+      bubble.innerHTML = role === 'user' ? text : marked.parse(text);
+
+      if (role === 'user') {
+        row.appendChild(bubble);
+        row.appendChild(avatar);
+      } else {
+        row.appendChild(avatar);
+        row.appendChild(bubble);
+      }
+
+      messagesList.appendChild(row);
+      scrollToBottom();
+      return bubble;
+    }
+
+    function scrollToBottom() {
+      const scroll = document.getElementById('chatScroll');
+      scroll.scrollTop = scroll.scrollHeight;
+    }
+
+    // セッション履歴の読み込み
+    async function loadSessions() {
+      try {
+        const res = await fetch('/api/sessions');
+        const sessions = await res.json();
+        const listEl = document.getElementById('sessionHistoryList');
+        listEl.innerHTML = '';
+        sessions.forEach(s => {
+          const item = document.createElement('div');
+          item.className = 'nav-item';
+          item.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>${s.title}</span>`;
+          item.onclick = () => loadSessionHistory(s.session_id);
+          listEl.appendChild(item);
+        });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadSessionHistory(sessionId) {
+      currentSessionId = sessionId;
+      document.getElementById('welcomeView').style.display = 'none';
+      const messagesList = document.getElementById('messagesList');
+      messagesList.innerHTML = '';
+
+      const res = await fetch(`/api/history/${sessionId}`);
+      const history = await res.json();
+      history.forEach(h => {
+        appendMessage(h.role, h.content);
+      });
+    }
+
+    // データベースモーダル
+    let allSources = [];
+    async function openDatabaseModal(category) {
+      document.getElementById('databaseModal').classList.add('active');
+      if (category && category !== '総合') {
+        document.getElementById('sourceCategoryFilter').value = category;
+      } else {
+        document.getElementById('sourceCategoryFilter').value = '';
+      }
+      const res = await fetch('/api/sources?limit=200');
+      allSources = await res.json();
+      renderSourcesTable();
+    }
+
+    function closeDatabaseModal() {
+      document.getElementById('databaseModal').classList.remove('active');
+    }
+
+    function filterSources() {
+      renderSourcesTable();
+    }
+
+    function renderSourcesTable() {
+      const query = document.getElementById('sourceSearchInput').value.toLowerCase();
+      const cat = document.getElementById('sourceCategoryFilter').value;
+      const tbody = document.getElementById('sourcesTableBody');
+      tbody.innerHTML = '';
+
+      allSources.forEach(s => {
+        if (cat && s.category !== cat) return;
+        if (query && !s.site_name.toLowerCase().includes(query) && !s.summary.toLowerCase().includes(query)) return;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td><strong>No.${s.source_no}</strong></td>
+          <td><span class="category-badge">${s.category}</span></td>
+          <td><a href="${s.url}" target="_blank" style="color:#2563eb; text-decoration:none;">${s.site_name}</a></td>
+          <td>${s.author || '-'}</td>
+          <td>${s.published_date}</td>
+          <td>${s.summary}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Web自動収集トリガー
+    async function triggerWebCollection() {
+      if (!confirm('Web上（DuckDuckGo）から最新のADHD関連情報を自動収集し、データベースを更新しますか？')) return;
+      try {
+        const res = await fetch('/api/collect', {method: 'POST'});
+        const data = await res.json();
+        alert(data.message);
+      } catch (e) {
+        alert('収集開始エラー: ' + e.message);
+      }
+    }
+
+    // 同期・保存トリガー
+    async function triggerSync() {
+      try {
+        const res = await fetch('/api/sync', {method: 'POST'});
+        const data = await res.json();
+        alert('同期結果:\n- Drive: ' + data.google_drive.message + '\n- GitHub: ' + data.github.message + '\n- XServer: ' + data.xserver.message);
+      } catch (e) {
+        alert('同期エラー: ' + e.message);
+      }
+    }
+
+    // ファイルアップロード
+    async function handleFileUpload(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const res = await fetch('/api/upload', {method: 'POST', body: formData});
+        const data = await res.json();
+        promptInput.value += ` [添付ファイル: ${data.filename}] `;
+      } catch (err) {
+        alert('アップロード失敗: ' + err.message);
+      }
+    }
+
+    // システム状態取得
+    async function checkStatus() {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        document.getElementById('statusGpuText').innerText = `${data.gpu}`;
+      } catch (e) {}
+    }
+
+    window.onload = () => {
+      loadSessions();
+      checkStatus();
+    };
+  </script>
+</body>
+</html>
