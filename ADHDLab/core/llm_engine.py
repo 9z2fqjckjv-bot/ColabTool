@@ -17,22 +17,15 @@ except ImportError:
     HAS_TORCH = False
 
 
-ADHD_SYSTEM_PROMPT = """あなたはADHD（注意欠陥多動性障害）の自己理解・タスク管理・メンタルケアに特化した世界最高峰のパーソナルAIメンター「ADHDLab」です。
+ADHD_SYSTEM_PROMPT = """あなたはADHD（注意欠陥多動性障害）の自己理解と実践的支援に特化した知性あふれるパーソナルAI「ADHDLab」です。
 
-【役割と使命】
-ADHD当事者が持つ「先延ばし」「集中力の持続困難」「過集中と疲労」「物忘れ」「片付けの苦手さ」「自己肯定感の低下」に対し、最新の神経科学・精神医学のエビデンスと、実践的なライフハックを融合して、温かく、かつ極めて具体的に伴走します。
+【コアスタンス】
+- 形式的・機械的な定型文や画一的なテンプレート回答を徹底的に排し、ユーザー一人ひとりの言葉のニュアンス、感情の揺らぎ、固有の状況を深く論理的・心理学的に推論して回答を導き出します。
+- 精神論や「頑張りましょう」といった抽象論ではなく、神経科学（前頭葉の実行機能、ドーパミン報酬系、デフォルト・モード・ネットワークなど）のメカニズムを踏まえた客観的かつ納得感の高い説明を行います。
+- ユーザーの思考負荷を減らすため、文脈に応じて柔軟に、具体的で今すぐ実行可能なアイデアや自己受容の視点を提示してください。
+- 以下の参照エビデンス（医療機関・公的機関・当事者の知見）を適宜活かし、根拠のある回答を組み立ててください。
 
-【対話原則】
-1. 絶対的な受容と共感:
-   - 「なぜできないのか」ではなく「脳の特性（ドーパミンの報酬予測誤差や前頭葉の実行機能）によるもの」として客観的に捉え、自責の念を即座に和らげます。
-2. タスクの超細分化（マイクロステップ法）:
-   - やる気が出ない・圧倒されている時は、タスクを「最初の30秒でできること（例: パソコンを開くだけ、机のペンを1本拾うだけ）」まで微細に分解します。
-3. 視覚的・構造的な出力:
-   - 長文の羅列を避け、見出し、箇条書き、絵文字（🎯, 💡, ⏱️, 📋）、チェックリスト形式で認知負荷を最小化します。
-4. データベース・エビデンスの引用:
-   - 医療機関・公的機関の知見や、当事者の成功事例を参照し、説得力と安心感を提供します。
-
-【提供されたエビデンスデータ（RAG）】
+【参照ナレッジベース（RAG）】
 {rag_context}
 """
 
@@ -84,18 +77,22 @@ class LLMEngine:
         prompt: str,
         chat_history: list = None,
         rag_context: str = "",
-        max_new_tokens: int = 1024,
-        temperature: float = 0.7
+        max_new_tokens: int = 1536,
+        temperature: float = 0.75
     ) -> Generator[str, None, None]:
-        """リアルタイムストリーミング出力"""
+        """Qwen 2.5 (14B) によるリアルタイム推論ストリーミング出力"""
+        # モデルが未ロードの場合はオンデマンドロード
+        if self.model is None or self.tokenizer is None:
+            if HAS_TORCH and torch.cuda.is_available():
+                yield "🔄 Qwen 2.5 (14B) モデルをVRAMにロード中... (初回のみ約1〜2分かかります)\n\n"
+                self.load_model()
+            else:
+                yield "⚠️ GPU環境（CUDA）が検出されませんでした。Google Colabのランタイムが「L4 GPU」に設定されているかご確認ください。\n\n"
+                return
+
         system_text = ADHD_SYSTEM_PROMPT.format(rag_context=rag_context if rag_context else "（特記事項なし）")
 
-        # CUDA/Transformersがロードされていない場合のフォールバック（デモ・テスト時）
-        if self.model is None or self.tokenizer is None:
-            yield from self._fallback_stream(prompt, rag_context)
-            return
-
-        # Qwen形式のチャットメッセージ構築
+        # 対話メッセージ履歴の構築
         messages = [{"role": "system", "content": system_text}]
         if chat_history:
             for item in chat_history[-6:]:
@@ -111,7 +108,7 @@ class LLMEngine:
 
         streamer = TextIteratorStreamer(
             self.tokenizer,
-            timeout=30.0,
+            timeout=60.0,
             skip_prompt=True,
             skip_special_tokens=True
         )
@@ -122,7 +119,7 @@ class LLMEngine:
             max_new_tokens=max_new_tokens,
             temperature=temperature,
             do_sample=True,
-            top_p=0.9,
+            top_p=0.92,
             repetition_penalty=1.05
         )
 
@@ -133,24 +130,3 @@ class LLMEngine:
             yield new_text
 
         thread.join()
-
-    def _fallback_stream(self, prompt: str, rag_context: str) -> Generator[str, None, None]:
-        """GPU未検出時やオフライン起動用のインテリジェント応答ストリーム"""
-        import time
-        response = (
-            f"🧠 **ADHDLab AIメンター (Qwen 2.5 14B モード)**\n\n"
-            f"お話しいただきありがとうございます。お気持ちや現状の状況、とてもよく分かります。\n\n"
-            f"### 💡 特性へのアプローチと解決策\n"
-            f"ADHDの特性（ドーパミンの枯渇や実行機能の揺らぎ）が影響している場合、決して「あなたの気合や根性」の問題ではありません。\n\n"
-            f"### 🎯 今すぐできるマイクロステップ（3ステップ）\n"
-            f"1. **⏱️ ハードルを極限まで下げる**: まずは『30秒だけ触る』『机に向かって座るだけ』を目標にしてください。\n"
-            f"2. **📋 視覚的トリガーを設置**: スマホのタイマーを15分にセットし、視界に入る場所に置きます。\n"
-            f"3. **🎁 小さな報酬を設定**: 30秒できたら、お気に入りのお茶を飲む・深呼吸するなど、脳に即時報酬を与えましょう。\n\n"
-        )
-        if rag_context:
-            response += f"### 📚 参照エビデンス（ADHDLabナレッジベースより）\n{rag_context}\n\n"
-        response += "一気にすべてをやろうとせず、まずは1ミリだけ動いてみましょう。一緒に進めていきましょう！"
-
-        for chunk in response.split(" "):
-            yield chunk + " "
-            time.sleep(0.03)

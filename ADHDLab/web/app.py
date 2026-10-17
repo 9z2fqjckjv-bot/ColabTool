@@ -64,6 +64,10 @@ async def startup_event():
     # Google Driveからの自動復元を試行
     storage_sync.restore_from_google_drive()
 
+    # バックグラウンドスレッドでLLMモデル (Qwen 2.5 14B) を自動ロード
+    import threading
+    threading.Thread(target=llm_engine.load_model, daemon=True).start()
+
 
 # --- API エンドポイント ---
 
@@ -99,8 +103,9 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
     if req.use_rag:
         rag_context = db_manager.get_rag_context(req.message, limit=4)
 
-    # 3. チャット履歴の取得
-    history = db_manager.get_chat_history(req.session_id)
+    # モデルの切り替えチェック
+    if req.model and req.model != llm_engine.model_name:
+        llm_engine.load_model(req.model)
 
     # 4. ストリーミングジェネレータ
     def event_stream():
@@ -110,7 +115,7 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
                 prompt=req.message,
                 chat_history=history,
                 rag_context=rag_context,
-                max_new_tokens=1024
+                max_new_tokens=1536
             ):
                 full_response.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
