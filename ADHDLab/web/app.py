@@ -103,6 +103,9 @@ async def chat_endpoint(req: ChatRequest, background_tasks: BackgroundTasks):
     if req.use_rag:
         rag_context = db_manager.get_rag_context(req.message, limit=4)
 
+    # 3. チャット履歴の取得
+    history = db_manager.get_chat_history(req.session_id)
+
     # モデルの切り替えチェック
     if req.model and req.model != llm_engine.model_name:
         llm_engine.load_model(req.model)
