@@ -54,19 +54,26 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.on_event("startup")
 async def startup_event():
-    # 既存のソースが0件なら初期シードを投入
-    sources = db_manager.get_all_sources_sorted()
-    if not sources:
-        print("🌱 初期シードデータを登録中...")
-        data_collector._seed_default_data()
-        db_manager.rebuild_and_export_excel()
-
-    # Google Driveからの自動復元を試行
-    storage_sync.restore_from_google_drive()
-
-    # バックグラウンドスレッドでLLMモデル (Qwen 2.5 14B) を自動ロード
     import threading
-    threading.Thread(target=llm_engine.load_model, daemon=True).start()
+
+    def _background_init():
+        try:
+            # 1. 既存ソースが0件なら初期シードを投入
+            sources = db_manager.get_all_sources_sorted()
+            if not sources:
+                print("🌱 初期シードデータを登録中...")
+                data_collector._seed_default_data()
+                db_manager.rebuild_and_export_excel()
+
+            # 2. Google Driveからの自動復元を試行
+            storage_sync.restore_from_google_drive()
+
+            # 3. LLMモデル (Qwen 2.5 14B) を自動ロード
+            llm_engine.load_model()
+        except Exception as e:
+            print(f"バックグラウンド初期化エラー: {e}")
+
+    threading.Thread(target=_background_init, daemon=True).start()
 
 
 # --- API エンドポイント ---
