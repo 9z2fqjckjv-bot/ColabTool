@@ -70,8 +70,9 @@ nb = {
     "---\n",
     "## 🚀 ステップ 1: 【ワンクリック統合起動】\n",
     "**下のセルを実行（再生ボタンを押す）するだけ** で、サーバー・Qwen 2.5・41体AIPlayer・Webポータルが全自動で起動します。  \n",
-    "サーバーはバックグラウンドで独立稼働し、**約45秒〜1分でこのセルの実行は完了**します。  \n",
-    "完了後、表示されるURLから **総合Webポータル** を開き、手元のMinecraft（Java版 1.21.x）から **`zuyasi.playit.plus`** へ接続してください。"
+    "起動完了後、このセルは **Colabのアイドル自動切断を防ぐ「常駐監視モード」** として稼働を維持し、サーバーTPSやBotの接続状況をリアルタイムで表示します。  \n",
+    "表示されるURLまたは下のインライン画面から **総合Webポータル** を開き、手元のMinecraft（Java版 1.21.x）から **`zuyasi.playit.plus`** へ接続してください。\n",
+    "（プレイを終了する際は、下の「ステップ 2: セーブ＆安全な終了」を実行してください）"
    ]
   },
   {
@@ -148,8 +149,33 @@ nb = {
     "print(\"\\n==================================================\")\n",
     "print(\"✨ 起動プロセスが正常に完了しました！\")\n",
     "print(\"🎮 Minecraft アドレス: zuyasi.playit.plus\")\n",
-    "print(\"🌐 総合Webポータル: 下記のインライン画面から直接操作可能です\")\n",
-    "print(\"==================================================\")\n"
+    "print(\"🌐 総合Webポータル: 上記のインライン画面またはポート3000から直接操作可能です\")\n",
+    "print(\"==================================================\")\n",
+    "\n",
+    "# 5. セッション常駐ハートビート＆稼働モニター (Colabのアイドル自動切断を完全防止)\n",
+    "print(\"🟢 サーバー常駐監視モードを開始しました (Colabのアイドル自動切断を防止中)\")\n",
+    "print(\"💡 終了する際は、下の「ステップ 2: セーブ＆安全な終了」セルを実行してください。\\n\")\n",
+    "\n",
+    "heartbeat = 0\n",
+    "while True:\n",
+    "    try:\n",
+    "        time.sleep(15)\n",
+    "        heartbeat += 1\n",
+    "        if heartbeat % 4 == 0:\n",
+    "            active_bots = 0\n",
+    "            db_path = \"/content/logs/deep_system_database.json\"\n",
+    "            if os.path.exists(db_path):\n",
+    "                try:\n",
+    "                    with open(db_path, \"r\", encoding=\"utf-8\") as f:\n",
+    "                        data = json.load(f)\n",
+    "                        active_bots = len([b for b in data.get(\"bots\", {}).values() if b.get(\"connected\")])\n",
+    "                except Exception:\n",
+    "                    pass\n",
+    "            uptime_min = (heartbeat * 15) // 60\n",
+    "            print(f\"[{time.strftime('%H:%M:%S')}] 🟢 稼働中 (連続稼働: {uptime_min}分) | 参加AIPlayer: {active_bots}/41体 | アドレス: zuyasi.playit.plus\", flush=True)\n",
+    "    except KeyboardInterrupt:\n",
+    "        print(\"\\n⚠️ 監視ループが中断されました。下の「ステップ 2」で安全に保存・停止してください。\")\n",
+    "        break\n"
    ]
   },
   {

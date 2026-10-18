@@ -75,7 +75,7 @@ def purge_old_4ai_logs():
                         pass
 
 def enforce_server_config():
-    """復元されたserver.propertiesのmax-players=100を強制維持"""
+    """復元されたserver.propertiesのmax-players=100およびenforce-secure-profile=falseを強制維持"""
     sp_path = SERVER_DIR / "server.properties"
     if sp_path.exists():
         try:
@@ -83,16 +83,22 @@ def enforce_server_config():
             lines = content.splitlines()
             new_lines = []
             has_max = False
+            has_sec = False
             for line in lines:
                 if line.startswith("max-players="):
                     new_lines.append("max-players=100")
                     has_max = True
+                elif line.startswith("enforce-secure-profile="):
+                    new_lines.append("enforce-secure-profile=false")
+                    has_sec = True
                 else:
                     new_lines.append(line)
             if not has_max:
                 new_lines.append("max-players=100")
+            if not has_sec:
+                new_lines.append("enforce-secure-profile=false")
             sp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            log("🛡️ server.properties の max-players=100 を確認・維持しました。")
+            log("🛡️ server.properties の max-players=100 & enforce-secure-profile=false を確認・維持しました。")
         except Exception as e:
             log(f"⚠️ server.properties 更新警告: {e}")
 

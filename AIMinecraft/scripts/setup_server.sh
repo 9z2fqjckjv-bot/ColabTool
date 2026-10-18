@@ -30,6 +30,8 @@ echo "eula=true" > eula.txt
 cat << 'EOF' > server.properties
 server-port=25565
 online-mode=false
+enforce-secure-profile=false
+white-list=false
 difficulty=normal
 gamemode=survival
 pvp=true

@@ -23,9 +23,14 @@ echo ">> [2/7] ストレージおよびキャッシュからデータ復元中..
 python3 "$REPO_DIR/scripts/backup_restore.py" restore_cache || true
 python3 "$REPO_DIR/scripts/backup_restore.py" restore || true
 
-# 旧4AIログの確実な消去 & サーバー設定の再保証 (max-players=100)
+# 旧4AIログの確実な消去 & サーバー設定の再保証 (max-players=100 & enforce-secure-profile=false)
 if [ -f "$SERVER_DIR/server.properties" ]; then
     sed -i 's/^max-players=.*/max-players=100/' "$SERVER_DIR/server.properties"
+    if grep -q "^enforce-secure-profile=" "$SERVER_DIR/server.properties"; then
+        sed -i 's/^enforce-secure-profile=.*/enforce-secure-profile=false/' "$SERVER_DIR/server.properties"
+    else
+        echo "enforce-secure-profile=false" >> "$SERVER_DIR/server.properties"
+    fi
 fi
 if [ -f "$SERVER_DIR/bukkit.yml" ]; then
     sed -i 's/connection-throttle:.*/connection-throttle: -1/' "$SERVER_DIR/bukkit.yml"
@@ -171,7 +176,7 @@ fi
 
 # 7. バックグラウンド定期自動バックアップ (5分ごと)
 echo ">> [7/7] バックグラウンド定期自動バックアップ常駐開始 (5分間隔)..."
-nohup bash -c "while true; do sleep 300; python3 '$REPO_DIR/scripts/backup_restore.py' backup > /content/autobackup.log 2>&1; done" > /dev/null 2>&1 &
+nohup bash -c "while true; do sleep 300; cp -f '$SERVER_DIR/logs/latest.log' /content/logs/mc_server_latest.log 2>/dev/null; cp -f /content/bots.log /content/logs/bots.log 2>/dev/null; python3 '$REPO_DIR/scripts/backup_restore.py' backup > /content/autobackup.log 2>&1; done" > /dev/null 2>&1 &
 
 PORTAL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" /content/portal_tunnel.log 2>/dev/null | head -n 1 || true)
 

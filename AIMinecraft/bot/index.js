@@ -152,6 +152,7 @@ class BotManager {
       host: SERVER_HOST,
       port: SERVER_PORT,
       username: role.name,
+      version: '1.21.1', // バージョン明示指定でPaperMCのハンドシェイク不整合を完全防止
       checkTimeoutInterval: 120000,
       viewDistance: 'tiny' // メモリ消費を最小限に抑制 (41体同時稼働最適化)
     });
@@ -177,6 +178,9 @@ class BotManager {
       const reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
       console.warn(`⚠️ [Bot - ${role.displayName}] KICK切断: ${reasonStr}`);
       db.logEvent('system', key, `KICK切断: ${reasonStr}`);
+      try {
+        fs.appendFileSync(path.join(LOGS_DIR, 'kicked_reasons.log'), `[${new Date().toISOString()}] ${role.displayName}: ${reasonStr}\n`);
+      } catch (_) {}
     });
 
     bot.on('error', (err) => {
