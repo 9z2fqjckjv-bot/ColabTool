@@ -26,19 +26,19 @@ cd "$SERVER_DIR"
 # EULA 同意
 echo "eula=true" > eula.txt
 
-# server.properties 最適化 (41AI + プレイヤー対応 max-players=100)
+# server.properties 最適化 (41AI + プレイヤー対応・Colab 2vCPU超軽量化)
 cat << 'EOF' > server.properties
 server-port=25565
 online-mode=false
 difficulty=normal
 gamemode=survival
 pvp=true
-view-distance=8
-simulation-distance=6
+view-distance=4
+simulation-distance=3
 max-players=100
 enable-command-block=true
 motd=Minecraft AI Colab Cluster Server (41 Bots)
-network-compression-threshold=256
+network-compression-threshold=512
 sync-chunk-writes=false
 allow-flight=true
 spawn-protection=0
@@ -52,24 +52,27 @@ settings:
   connection-throttle: -1
 EOF
 
-# spigot.yml 最適化 (タイムアウト時間の拡大)
+# spigot.yml 最適化 (タイムアウト判定を300秒に大幅拡大し即時切断を根絶)
 cat << 'EOF' > spigot.yml
 settings:
-  timeout-time: 180
+  timeout-time: 300
   restart-on-crash: false
 EOF
 
-# PaperMC / Purpur グローバル設定 (パケット制限・ユーザー名検証の緩和)
+# PaperMC / Purpur グローバル設定 (Watchdog遅延緩和・パケット制限緩和)
 mkdir -p config
 cat << 'EOF' > config/paper-global.yml
 unsupported-settings:
   perform-username-validation: false
+watchdog:
+  early-warning-every: 0
+  early-warning-delay: 100000
 packet-limiter:
   kick-message: 'Kicked for spamming packets'
   limits:
     all:
       interval: 10.0
-      max-packet-rate: 2500.0
+      max-packet-rate: 5000.0
 EOF
 
 echo "=== [3/4] PaperMC / Purpur (Java 21 最適化サーバー 1.21.1) の準備 ==="

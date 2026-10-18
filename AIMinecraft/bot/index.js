@@ -34,6 +34,7 @@ try {
 } catch (_) {}
 
 const brain = new AIBrain();
+let cachedMcData = null;
 
 class BotManager {
   constructor() {
@@ -156,9 +157,14 @@ class BotManager {
     });
 
     bot.loadPlugin(pathfinder);
-    bot.loadPlugin(pvp);
-    bot.loadPlugin(autoEat);
-    bot.loadPlugin(collectBlock);
+    // 戦闘・狩猟BotのみPvPプラグインをロード
+    if (role.category === 'combat' || role.category === 'hunting') {
+      bot.loadPlugin(pvp);
+    }
+    // 採集・採掘・農業Botのみブロック回収プラグインをロード
+    if (role.category === 'gathering' || role.category === 'farming' || role.category === 'mining') {
+      bot.loadPlugin(collectBlock);
+    }
 
     const botWrapper = new BotInstance(key, role, bot, this);
     this.bots[key] = botWrapper;
@@ -288,8 +294,10 @@ class BotInstance {
   onSpawn() {
     this.connected = true;
     try {
-      this.mcData = require('minecraft-data')(this.bot.version);
+      if (!cachedMcData) cachedMcData = require('minecraft-data')(this.bot.version);
+      this.mcData = cachedMcData;
       this.movements = new Movements(this.bot, this.mcData);
+      this.movements.canDig = (this.role.category === 'gathering' || this.role.category === 'mining');
       this.bot.pathfinder.setMovements(this.movements);
     } catch (e) {
       console.warn(`[Pathfinder Init - ${this.key}] ${e.message}`);
@@ -308,11 +316,8 @@ class BotInstance {
       }
     });
 
-    // 役割別自律ループの開始 (直後500msで初回実行、以降8秒周期)
+    // 役割別自律ループの開始 (CPUスパイク防止のため分散起動)
     this.startRoleLoop();
-    setTimeout(() => {
-      this.runRoleAction();
-    }, 500);
   }
 
   recordActionAndDiary(taskText, isImportant = false) {
@@ -352,11 +357,15 @@ class BotInstance {
     } catch (_) {}
   }
 
-  // --- 役割別自律行動ループ ---
+  // --- 役割別自律行動ループ (15秒周期 & ジッター分散で2vCPUの過負荷・タイムアウトを完全解消) ---
   startRoleLoop() {
-    setInterval(() => {
+    const jitter = Math.floor(Math.random() * 4000);
+    setTimeout(() => {
       this.runRoleAction();
-    }, 8000);
+      setInterval(() => {
+        this.runRoleAction();
+      }, 15000);
+    }, jitter + 400);
   }
 
   runRoleAction() {
@@ -471,10 +480,10 @@ class BotInstance {
   // 3. 木こり & 資材集め
   async loopGathering() {
     if (this.key === 'Kikori') {
-      // 10チャンク以内の原木伐採
+      // 原木伐採 (探索範囲24ブロックでCPU負荷抑制)
       const logBlock = this.bot.findBlock({
         matching: b => b && b.name && b.name.includes('_log'),
-        maxDistance: 48
+        maxDistance: 24
       });
       if (logBlock) {
         this.recordActionAndDiary(`原木(${logBlock.name})を伐採中 [XYZ: ${logBlock.position.x},${logBlock.position.y},${logBlock.position.z}]`, true);
@@ -499,7 +508,7 @@ class BotInstance {
 
       const targetBlock = this.bot.findBlock({
         matching: b => b && b.name && (b.name.includes(matchName) || (this.key === 'Shizai_Ore' && (b.name.includes('ore') || b.name.includes('copper')))),
-        maxDistance: 32
+        maxDistance: 20
       });
 
       if (targetBlock) {
@@ -573,7 +582,7 @@ class BotInstance {
   async loopMining() {
     const ore = this.bot.findBlock({
       matching: b => b && b.name && (b.name.includes('_ore') || b.name.includes('raw_')),
-      maxDistance: 20
+      maxDistance: 16
     });
     if (ore) {
       this.recordActionAndDiary(`洞窟内で鉱石(${ore.name})を採掘中 [${ore.position.x},${ore.position.y},${ore.position.z}]`, true);

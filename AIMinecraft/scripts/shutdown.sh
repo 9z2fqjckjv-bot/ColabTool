@@ -14,6 +14,7 @@ echo "=================================================="
 
 # 0. 定期バックアッププロセスの終了
 pkill -f "backup_restore.py" || true
+pkill -f "sleep 999999999" || true
 
 # 1. AIPlayer クラスタの安全停止
 echo ">> [1/5] 全41体のAIPlayerを安全にログアウト中..."

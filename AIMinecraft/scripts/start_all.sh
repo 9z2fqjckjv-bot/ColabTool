@@ -69,13 +69,16 @@ echo "✅ Qwen 2.5 推論エンジンの準備完了 ($MODEL_NAME)。"
 echo ">> [4/7] Minecraftサーバー (PaperMC 1.21.1) 起動中..."
 cd "$SERVER_DIR"
 pkill -f "server.jar" || true
+pkill -f "sleep 999999999" || true
 
 PIPE_PATH="$SERVER_DIR/server.pipe"
 rm -f "$PIPE_PATH"
 mkfifo "$PIPE_PATH"
+# FIFOパイプのEOFクローズによるJavaサーバーの意図しないシャットダウンを完全防止
+nohup sleep 999999999 > "$PIPE_PATH" 2>/dev/null &
 
-# サーバー起動 (Colab RAM最適化: -Xms2G -Xmx7G)
-nohup tail -f "$PIPE_PATH" | java -Xms2G -Xmx7G -XX:+UseG1GC -jar server.jar nogui > "$SERVER_DIR/logs/latest.log" 2>&1 &
+# サーバー起動 (Colab RAM最適化: -Xms1G -Xmx4G でOOM Killerを回避)
+nohup java -Xms1G -Xmx4G -XX:+UseG1GC -jar server.jar nogui < "$PIPE_PATH" > "$SERVER_DIR/logs/latest.log" 2>&1 &
 MC_PID=$!
 echo "$MC_PID" > /content/mc_server.pid
 
@@ -149,9 +152,9 @@ for i in {1..15}; do
 done
 
 export SERVER_PIPE="$PIPE_PATH"
-export NODE_OPTIONS="--max-old-space-size=8192"
+export NODE_OPTIONS="--max-old-space-size=4096"
 nohup node index.js > /content/bots.log 2>&1 &
-echo "✅ AIPlayerクラスタ (41体・メモリ8GB) & Webポータルをバックグラウンド起動しました (ポート: 3000)"
+echo "✅ AIPlayerクラスタ (41体・メモリ4GB) & Webポータルをバックグラウンド起動しました (ポート: 3000)"
 
 # Webポータルの外部公開用トンネル (Cloudflare Tunnel - 登録不要・無料)
 if ! command -v cloudflared >/dev/null 2>&1; then
