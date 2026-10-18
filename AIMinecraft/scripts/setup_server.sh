@@ -1,6 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # setup_server.sh - Minecraft Paper Server & playit.gg & RadarMap Auto Setup
+# (改善指示書v2準拠: 41体AIPlayer対応 max-players=100 & 軽量高速セットアップ)
 # ==============================================================================
 set -e
 
@@ -11,15 +12,7 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== [1/4] Java 21 JDK および必要パッケージのセットアップ ==="
 apt-get update -qq
-apt-get install -y -qq openjdk-21-jdk-headless curl jq screen xvfb ffmpeg x11-utils openbox wget zstd nodejs npm rsync build-essential libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev mesa-utils libgl1-mesa-dri > /dev/null 2>&1
-
-# 画面収録用ブラウザ (Google Chrome 安定版) の確認・インストール
-if ! which google-chrome > /dev/null 2>&1 && ! which google-chrome-stable > /dev/null 2>&1; then
-    echo "画面収録用ブラウザ (Google Chrome 安定版) をダウンロード・セットアップ中..."
-    wget -q -O /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-    apt-get install -y -qq /tmp/google-chrome.deb > /dev/null 2>&1 || apt-get install -y -f -qq > /dev/null 2>&1
-    rm -f /tmp/google-chrome.deb
-fi
+apt-get install -y -qq openjdk-21-jdk-headless curl jq screen wget zstd nodejs npm rsync netcat-openbsd > /dev/null 2>&1
 
 echo "Javaバージョン:"
 java -version 2>&1 | head -n 1
@@ -33,7 +26,7 @@ cd "$SERVER_DIR"
 # EULA 同意
 echo "eula=true" > eula.txt
 
-# server.properties 最適化
+# server.properties 最適化 (41AI + プレイヤー対応 max-players=100)
 cat << 'EOF' > server.properties
 server-port=25565
 online-mode=false
@@ -42,23 +35,22 @@ gamemode=survival
 pvp=true
 view-distance=8
 simulation-distance=6
-max-players=10
+max-players=100
 enable-command-block=true
-motd=Minecraft AI Colab Server
+motd=Minecraft AI Colab Cluster Server (41 Bots)
 network-compression-threshold=256
 sync-chunk-writes=false
 allow-flight=true
 spawn-protection=0
 EOF
 
-# bukkit.yml 最適化 (同一IPからのAIPlayer連続接続制限を完全解除)
+# bukkit.yml 最適化 (同一IPからの41体AIPlayer連続接続制限を完全解除)
 cat << 'EOF' > bukkit.yml
 settings:
   allow-end: true
   warn-on-overload: false
   connection-throttle: -1
 EOF
-
 
 echo "=== [3/4] PaperMC / Purpur (Java 21 最適化サーバー 1.21.1) の準備 ==="
 if [ ! -f "server.jar" ] || [ ! -s "server.jar" ]; then
@@ -106,7 +98,6 @@ elif [ -f "/tmp/ColabTool_fetch/plugins/RadarMap.jar" ]; then
     echo "✅ RadarMap.jar の導入完了！"
 fi
 
-# フォールバック: もし万が一JARが存在しない、または破損している場合はJava 21で即時オンデマンドビルド
 if [ "$RADAR_DEPLOYED" = false ] || [ ! -s "$SERVER_DIR/plugins/RadarMap.jar" ]; then
     echo "RadarMap ソースから Java 21 向け自動コンパイルを実行中..."
     BUILD_DIR="/tmp/radarmap_live_build"

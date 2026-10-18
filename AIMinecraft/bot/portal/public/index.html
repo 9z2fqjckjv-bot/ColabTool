@@ -1,0 +1,1526 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Minecraft AI Cluster 総合行動モニター & Webポータル</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0d14;
+      --bg-card: rgba(18, 24, 38, 0.75);
+      --bg-card-hover: rgba(26, 34, 54, 0.85);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(99, 102, 241, 0.3);
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --secondary: #ec4899;
+      --accent: #06b6d4;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+      --radius-sm: 8px;
+      --radius-md: 14px;
+      --radius-lg: 20px;
+      --font-heading: 'Outfit', sans-serif;
+      --font-body: 'Inter', -apple-system, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --glow-primary: 0 0 25px rgba(99, 102, 241, 0.25);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-body);
+      min-height: 100vh;
+      overflow-x: hidden;
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.12) 0%, transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(236, 72, 153, 0.08) 0%, transparent 45%);
+    }
+
+    /* Layout */
+    .app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 28px;
+      background: rgba(10, 13, 20, 0.85);
+      backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-color);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .header-logo {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .logo-badge {
+      width: 44px;
+      height: 44px;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      border-radius: var(--radius-md);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      box-shadow: var(--glow-primary);
+    }
+    .logo-text h1 {
+      font-family: var(--font-heading);
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(to right, #fff, #cbd5e1);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .logo-text p {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .badge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    .pulse-dot {
+      width: 8px;
+      height: 8px;
+      background-color: currentColor;
+      border-radius: 50%;
+      animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+
+    .btn {
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--font-body);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+    }
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+    }
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .btn-danger {
+      background: rgba(239, 68, 68, 0.15);
+      color: #f87171;
+      border: 1px solid rgba(239, 68, 68, 0.3);
+    }
+    .btn-danger:hover {
+      background: rgba(239, 68, 68, 0.25);
+    }
+
+    /* Navigation Bar */
+    .nav-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 10px 28px;
+      background: rgba(13, 17, 28, 0.95);
+      border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nav-tab {
+      padding: 8px 16px;
+      border-radius: var(--radius-sm);
+      color: var(--text-muted);
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+      white-space: nowrap;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .nav-tab:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.04);
+    }
+    .nav-tab.active {
+      color: #fff;
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(168, 85, 247, 0.15));
+      border: 1px solid var(--border-accent);
+    }
+
+    /* Content Area */
+    .main-content {
+      padding: 24px 28px;
+      max-width: 1700px;
+      margin: 0 auto;
+    }
+    .tab-pane {
+      display: none;
+      animation: fadeIn 0.3s ease;
+    }
+    .tab-pane.active {
+      display: block;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Common Card */
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .card-title {
+      font-family: var(--font-heading);
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    /* Dashboard Grid */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .stat-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+    .stat-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-accent);
+    }
+    .stat-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-sm);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .stat-val {
+      font-family: var(--font-heading);
+      font-size: 1.6rem;
+      font-weight: 800;
+      line-height: 1.1;
+    }
+    .stat-label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    /* Radar Map */
+    .map-container {
+      position: relative;
+      width: 100%;
+      height: 600px;
+      background: #080c14;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+      display: flex;
+    }
+    #radarCanvas {
+      flex: 1;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+    .map-sidebar {
+      width: 320px;
+      background: rgba(13, 17, 28, 0.95);
+      border-left: 1px solid var(--border-color);
+      padding: 18px;
+      overflow-y: auto;
+    }
+    .map-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 4px 8px;
+      border-radius: 4px;
+    }
+    .legend-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    /* Bot Grid */
+    .bot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .bot-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      transition: all 0.2s ease;
+      cursor: pointer;
+    }
+    .bot-card:hover {
+      background: var(--bg-card-hover);
+      border-color: var(--border-accent);
+      transform: translateY(-2px);
+    }
+    .bot-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .bot-name {
+      font-weight: 700;
+      font-size: 0.95rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .role-badge {
+      font-size: 0.7rem;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-weight: 600;
+    }
+    .bot-bars {
+      margin: 8px 0;
+    }
+    .bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      margin-bottom: 4px;
+    }
+    .progress-bar-bg {
+      flex: 1;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.3s ease;
+    }
+    .bot-coord {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-dim);
+    }
+    .bot-task {
+      font-size: 0.8rem;
+      color: var(--accent);
+      margin-top: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Terminal Logs */
+    .terminal-box {
+      background: #060910;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      font-family: var(--font-mono);
+      font-size: 0.8rem;
+      height: 480px;
+      overflow-y: auto;
+      padding: 14px;
+      color: #cbd5e1;
+    }
+    .log-line {
+      margin-bottom: 6px;
+      line-height: 1.4;
+      display: flex;
+      gap: 8px;
+    }
+    .log-time { color: var(--text-dim); }
+    .log-tag {
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      font-weight: 700;
+    }
+    .tag-chat { background: #3b82f6; color: #fff; }
+    .tag-combat { background: #ef4444; color: #fff; }
+    .tag-harvest { background: #10b981; color: #fff; }
+    .tag-commander { background: #eab308; color: #000; }
+    .tag-system { background: #64748b; color: #fff; }
+
+    /* Commander Reports */
+    .commander-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+      gap: 18px;
+    }
+    .commander-card {
+      background: var(--bg-card);
+      border: 1px solid rgba(234, 179, 8, 0.25);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      position: relative;
+      overflow: hidden;
+    }
+    .commander-card::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, #eab308, #f59e0b);
+    }
+
+    /* Proposals */
+    .proposal-card {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.08), rgba(6, 182, 212, 0.04));
+      border: 1px solid var(--border-accent);
+      border-radius: var(--radius-md);
+      padding: 20px;
+      margin-bottom: 16px;
+    }
+    .proposal-title {
+      font-family: var(--font-heading);
+      font-size: 1.15rem;
+      font-weight: 700;
+      color: #a5b4fc;
+      margin-bottom: 8px;
+    }
+
+    /* Chest Visual Grid */
+    .chest-grid {
+      display: grid;
+      grid-template-columns: repeat(9, 44px);
+      gap: 4px;
+      background: #8b8b8b;
+      padding: 8px;
+      border: 3px solid #373737;
+      border-radius: 4px;
+      width: fit-content;
+      margin-top: 10px;
+    }
+    .chest-slot {
+      width: 44px;
+      height: 44px;
+      background: #8b8b8b;
+      border: 2px solid #373737;
+      box-shadow: inset 2px 2px 0 #373737, inset -2px -2px 0 #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      font-size: 0.75rem;
+    }
+    .slot-count {
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: #fff;
+      text-shadow: 1px 1px 0 #000;
+    }
+
+    /* YouTube Slide Presentation View */
+    .slide-wrapper {
+      max-width: 1080px;
+      margin: 0 auto;
+    }
+    .slide-box {
+      aspect-ratio: 16 / 9;
+      background: linear-gradient(135deg, #111827 0%, #1e1b4b 100%);
+      border: 2px solid rgba(168, 85, 247, 0.35);
+      border-radius: var(--radius-lg);
+      padding: 48px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      position: relative;
+    }
+    .slide-number {
+      font-family: var(--font-mono);
+      font-size: 0.9rem;
+      color: #c084fc;
+      font-weight: 700;
+    }
+    .slide-title {
+      font-family: var(--font-heading);
+      font-size: 2.4rem;
+      font-weight: 800;
+      line-height: 1.2;
+      background: linear-gradient(to right, #fff, #e0e7ff);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-top: 8px;
+    }
+    .slide-subtitle {
+      font-size: 1.2rem;
+      color: #a5b4fc;
+      margin-top: 4px;
+    }
+    .slide-bullets {
+      margin: 28px 0;
+      list-style-type: none;
+    }
+    .slide-bullets li {
+      font-size: 1.15rem;
+      line-height: 1.6;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .slide-bullets li::before {
+      content: "✦";
+      color: #38bdf8;
+      font-size: 1.2rem;
+    }
+    .slide-speaker-notes {
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 12px 16px;
+      font-size: 0.85rem;
+      color: #cbd5e1;
+    }
+
+    /* Chat Window */
+    .chat-layout {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 18px;
+      height: 600px;
+    }
+    .chat-messages {
+      background: #080c14;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 16px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .chat-msg {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: var(--radius-sm);
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .chat-user {
+      align-self: flex-end;
+      background: var(--primary);
+      color: #fff;
+    }
+    .chat-bot {
+      align-self: flex-start;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid var(--border-color);
+    }
+    .chat-sender {
+      font-weight: 700;
+      font-size: 0.75rem;
+      margin-bottom: 4px;
+      color: #38bdf8;
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .text-input {
+      flex: 1;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      color: #fff;
+      font-family: var(--font-body);
+      font-size: 0.85rem;
+    }
+    .text-input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    .mention-chip {
+      padding: 4px 10px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border-color);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      display: inline-block;
+      margin: 2px;
+    }
+    .mention-chip:hover {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: var(--primary);
+    }
+
+    /* DB Explorer Table */
+    .db-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.8rem;
+    }
+    .db-table th, .db-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border-color);
+      text-align: left;
+    }
+    .db-table th {
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+    .db-table tr:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <div class="header-logo">
+      <div class="logo-badge">🤖</div>
+      <div class="logo-text">
+        <h1>Minecraft AI Cluster 総合ポータル</h1>
+        <p>41体の自律AIPlayer & Qwen 2.5 リアルタイム統括マネージャー</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="badge-status" id="connectionBadge">
+        <span class="pulse-dot"></span>
+        <span id="connectionText">接続中...</span>
+      </div>
+      <button class="btn btn-secondary" onclick="sendQuickCommand('/time set day')">☀️ 昼にする</button>
+      <button class="btn btn-secondary" onclick="sendQuickCommand('/time set night')">🌙 夜にする</button>
+      <button class="btn btn-secondary" onclick="sendQuickCommand('/weather clear')">🌤️ 晴れ</button>
+      <button class="btn btn-primary" onclick="sendQuickCommand('save-all')">💾 セーブ</button>
+      <button class="btn btn-danger" onclick="sendQuickCommand('@all 拠点に全員集合してください')">📍 全員集合</button>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="nav-tabs">
+    <div class="nav-tab active" onclick="switchTab('dashboard')">📊 ダッシュボード</div>
+    <div class="nav-tab" onclick="switchTab('map')">🗺️ レーダーマップ</div>
+    <div class="nav-tab" onclick="switchTab('monitor')">🤖 AI行動モニター</div>
+    <div class="nav-tab" onclick="switchTab('commanders')">📋 司令塔進捗報告</div>
+    <div class="nav-tab" onclick="switchTab('diaries')">📜 行動日誌</div>
+    <div class="nav-tab" onclick="switchTab('proposals')">💡 AI改善提案</div>
+    <div class="nav-tab" onclick="switchTab('chat')">💬 チャット＆コンソール</div>
+    <div class="nav-tab" onclick="switchTab('chests')">📦 拠点チェスト</div>
+    <div class="nav-tab" onclick="switchTab('farm-ranch')">🌱 畑＆飼育場</div>
+    <div class="nav-tab" onclick="switchTab('database')">🗄️ 深部データベース</div>
+    <div class="nav-tab" onclick="switchTab('slides')">🎬 統括日報 (YouTubeスライド)</div>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="main-content">
+
+    <!-- 1. ダッシュボード -->
+    <section id="tab-dashboard" class="tab-pane active">
+      <div class="stat-grid">
+        <div class="stat-card">
+          <div class="stat-icon" style="color: #6366f1;">🤖</div>
+          <div>
+            <div class="stat-val" id="statActiveBots">41 / 41</div>
+            <div class="stat-label">稼働中 AIPlayer</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="color: #10b981;">⚡</div>
+          <div>
+            <div class="stat-val" id="statTps">20.0</div>
+            <div class="stat-label">サーバー TPS</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="color: #f59e0b;">📦</div>
+          <div>
+            <div class="stat-val" id="statHarvestTotal">0</div>
+            <div class="stat-label">累計収集資材数</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="color: #06b6d4;">🌾</div>
+          <div>
+            <div class="stat-val" id="statFarmPlots">0</div>
+            <div class="stat-label">耕作地マス数</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="color: #ec4899;">🐄</div>
+          <div>
+            <div class="stat-val" id="statRanchTotal">0</div>
+            <div class="stat-label">飼育動物頭数</div>
+          </div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon" style="color: #eab308;">💡</div>
+          <div>
+            <div class="stat-val" id="statProposals">0</div>
+            <div class="stat-label">AI改善提案数</div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 20px;">
+        <div class="card">
+          <div class="card-title">
+            <span>📡 リアルタイム稼働サマリー</span>
+            <button class="btn btn-secondary" onclick="fetchStats()">更新</button>
+          </div>
+          <div id="quickSummary" style="font-size: 0.9rem; line-height: 1.6; color: #cbd5e1;">
+            全41体のAIPlayerが各担当ブロックで活動中。司令塔が資材を回収し拠点チェストへ格納しています。
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">
+            <span>🛡️ 拠点＆要所座標</span>
+          </div>
+          <div style="font-size: 0.85rem; line-height: 1.8;">
+            <div>🏡 <b>拠点中心:</b> X:95, Y:63, Z:43</div>
+            <div>🚪 <b>玄関北ドア:</b> X:94, Y:63, Z:39</div>
+            <div>🌊 <b>水中迎撃水域:</b> X:95〜125, Z:40〜75</div>
+            <div>🔮 <b>荒廃ポータル:</b> X:278, Y:63, Z:94 (ボート移動)</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. レーダーマップ -->
+    <section id="tab-map" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>🗺️ 全AIPlayer リアルタイムレーダーマップ</span>
+          <div style="font-size: 0.85rem; color: var(--text-muted);">
+            縮尺: 自動追従 | 中心: 拠点 (95, 43)
+          </div>
+        </div>
+        <div class="map-container">
+          <canvas id="radarCanvas" width="900" height="600"></canvas>
+          <div class="map-sidebar">
+            <h3 style="font-size: 0.95rem; margin-bottom: 10px;">部隊カラー凡例</h3>
+            <div class="map-legend">
+              <div class="legend-item"><span class="legend-dot" style="background: #ffffff;"></span> プレイヤー</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #ef4444;"></span> 迎撃部隊</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #10b981;"></span> 木こり・資材</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #f59e0b;"></span> 農業</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #06b6d4;"></span> 釣り</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #6366f1;"></span> 洞窟発掘</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #a855f7;"></span> ネザー遠征</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #ec4899;"></span> 飼育・狩猟</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #eab308;"></span> 司令塔</div>
+              <div class="legend-item"><span class="legend-dot" style="background: #3b82f6;"></span> ヘルパー/お供</div>
+            </div>
+            <div style="margin-top: 20px;">
+              <h3 style="font-size: 0.95rem; margin-bottom: 8px;">選択中ボット情報</h3>
+              <div id="mapSelectedBot" style="font-size: 0.8rem; color: var(--text-muted);">
+                マップ上のマーカーをクリックすると詳細が表示されます。
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. AI行動モニター＆ログ -->
+    <section id="tab-monitor" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>🤖 41体 AIPlayer 行動モニターグリッド</span>
+          <input type="text" id="botFilterInput" class="text-input" placeholder="名前や役割で絞り込み..." style="max-width: 260px;" oninput="renderBotGrid()">
+        </div>
+        <div class="bot-grid" id="botGrid"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">
+          <span>📜 ストリーミング行動ログ</span>
+          <div style="display: flex; gap: 8px;">
+            <select id="logCategorySelect" class="text-input" style="padding: 4px 8px;" onchange="fetchLogs()">
+              <option value="all">全カテゴリ</option>
+              <option value="chat">チャット</option>
+              <option value="combat">戦闘・迎撃</option>
+              <option value="harvest">採掘・収穫</option>
+              <option value="commander">司令塔</option>
+              <option value="system">システム</option>
+            </select>
+            <button class="btn btn-secondary" onclick="fetchLogs()">再読み込み</button>
+          </div>
+        </div>
+        <div class="terminal-box" id="terminalBox"></div>
+      </div>
+    </section>
+
+    <!-- 4. 司令塔進捗報告 -->
+    <section id="tab-commanders" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>📋 11名の司令塔による現場統括レポート</span>
+          <span style="font-size: 0.8rem; color: var(--text-muted);">各分担の進捗・資材回収・拠点チェスト格納状況</span>
+        </div>
+        <div class="commander-grid" id="commanderGrid"></div>
+      </div>
+    </section>
+
+    <!-- 5. 行動日誌 -->
+    <section id="tab-diaries" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>📜 AIPlayer サバイバル行動日誌</span>
+          <div style="display: flex; gap: 10px;">
+            <select id="diaryBotSelect" class="text-input" style="min-width: 180px;" onchange="loadSelectedDiary()"></select>
+            <button class="btn btn-secondary" onclick="loadDiaries()">日誌一覧更新</button>
+          </div>
+        </div>
+        <div id="diaryContent" style="background: rgba(0,0,0,0.3); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 20px; font-size: 0.9rem; line-height: 1.7; white-space: pre-wrap; max-height: 600px; overflow-y: auto;">
+          日誌を選択してください。
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. AI改善提案 -->
+    <section id="tab-proposals" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>💡 Qwen 2.5 自律学習による改善提案</span>
+          <button class="btn btn-primary" onclick="generateProposals()">🔄 最新日誌から再分析・改善提案を生成</button>
+        </div>
+        <div id="proposalsList"></div>
+      </div>
+    </section>
+
+    <!-- 7. チャット＆コンソール -->
+    <section id="tab-chat" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>💬 リアルタイム対話 & サーバーコンソール</span>
+        </div>
+        <div class="chat-layout">
+          <div>
+            <div class="chat-messages" id="chatBox"></div>
+            <div style="margin-top: 10px;">
+              <span style="font-size: 0.75rem; color: var(--text-muted); margin-right: 6px;">メンション:</span>
+              <span class="mention-chip" onclick="addMention('@all')">@all</span>
+              <span class="mention-chip" onclick="addMention('@お供')">@お供</span>
+              <span class="mention-chip" onclick="addMention('@木こり司令')">@木こり司令</span>
+              <span class="mention-chip" onclick="addMention('@撃退司令')">@撃退司令</span>
+              <span class="mention-chip" onclick="addMention('@農作業司令')">@農作業司令</span>
+              <span class="mention-chip" onclick="addMention('@資材司令')">@資材司令</span>
+              <span class="mention-chip" onclick="addMention('@ネザー司令')">@ネザー司令</span>
+              <span class="mention-chip" onclick="addMention('@ヘルパー')">@ヘルパー</span>
+            </div>
+            <div class="chat-input-row">
+              <input type="text" id="chatInput" class="text-input" placeholder="AI仲間へチャットや指示を入力 (Enterで送信)..." onkeydown="if(event.key==='Enter') sendChat()">
+              <button class="btn btn-primary" onclick="sendChat()">送信</button>
+            </div>
+          </div>
+          <div>
+            <h3 style="font-size: 0.95rem; margin-bottom: 12px;">サーバーコンソール (RCON)</h3>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <button class="btn btn-secondary" onclick="sendQuickCommand('/difficulty normal')">難易度: Normal</button>
+              <button class="btn btn-secondary" onclick="sendQuickCommand('/gamerule keepInventory true')">全ロス防止 (keepInventory)</button>
+              <button class="btn btn-secondary" onclick="sendQuickCommand('/gamerule doFireTick false')">延焼防止 (doFireTick false)</button>
+              <button class="btn btn-secondary" onclick="sendQuickCommand('/tp @a 95 64 43')">全員を拠点へテレポート</button>
+              <hr style="border-color: var(--border-color); margin: 10px 0;">
+              <input type="text" id="consoleInput" class="text-input" placeholder="任意のコマンド (/say, /give, etc.)" onkeydown="if(event.key==='Enter') sendConsoleCommand()">
+              <button class="btn btn-secondary" onclick="sendConsoleCommand()">実行</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. 拠点チェスト -->
+    <section id="tab-chests" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>📦 拠点内チェスト リアルタイム閲覧</span>
+          <button class="btn btn-secondary" onclick="fetchChests()">更新</button>
+        </div>
+        <div id="chestList"></div>
+      </div>
+    </section>
+
+    <!-- 9. 畑＆飼育場 -->
+    <section id="tab-farm-ranch" class="tab-pane">
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+        <div class="card">
+          <div class="card-title">🌾 畑の稼働状況＆生産統計</div>
+          <div id="farmContent" style="font-size: 0.9rem; line-height: 1.8;"></div>
+        </div>
+        <div class="card">
+          <div class="card-title">🐄 飼育場（牧場）稼働状況</div>
+          <div id="ranchContent" style="font-size: 0.9rem; line-height: 1.8;"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10. 深部データベース -->
+    <section id="tab-database" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>🗄️ システム深部データベース エクスプローラー</span>
+          <div style="display: flex; gap: 10px;">
+            <select id="dbTableSelect" class="text-input" onchange="queryDatabase()">
+              <option value="bots">bots (全ボット状態)</option>
+              <option value="harvest_logs">harvest_logs (収集履歴)</option>
+              <option value="events">events (全イベントログ)</option>
+              <option value="chests">chests (拠点チェスト)</option>
+              <option value="commander_reports">commander_reports (司令塔報告)</option>
+              <option value="improvement_proposals">improvement_proposals (改善提案)</option>
+              <option value="executive_reports">executive_reports (統括日報)</option>
+            </select>
+            <button class="btn btn-secondary" onclick="queryDatabase()">クエリ実行</button>
+          </div>
+        </div>
+        <div style="overflow-x: auto; max-height: 550px;">
+          <table class="db-table" id="dbTable">
+            <thead id="dbTableHead"></thead>
+            <tbody id="dbTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11. 統括日報 (YouTubeスライド) -->
+    <section id="tab-slides" class="tab-pane">
+      <div class="card">
+        <div class="card-title">
+          <span>🎬 統括日報 (YouTube動画用プレゼンテーションスライド)</span>
+          <button class="btn btn-primary" onclick="generateReport()">🔄 今日の統括日報を自動生成</button>
+        </div>
+        
+        <div class="slide-wrapper">
+          <div class="slide-box" id="slideBox">
+            <div>
+              <div class="slide-number" id="slideNumber">SLIDE 1 / 4</div>
+              <h2 class="slide-title" id="slideTitle">自律サバイバル帝国 統括日報</h2>
+              <div class="slide-subtitle" id="slideSubtitle">41体のAIと挑むMinecraftワールド開拓記録</div>
+              <ul class="slide-bullets" id="slideBullets">
+                <li>サーバー起動中...</li>
+              </ul>
+            </div>
+            <div>
+              <div class="slide-speaker-notes" id="slideNotes">
+                <b>🎙️ YouTubeナレーション原稿:</b> <span id="slideNotesText">読み込み中...</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 18px;">
+            <button class="btn btn-secondary" onclick="prevSlide()">◀ 前のスライド</button>
+            <div id="slideCounter" style="font-weight: 700; font-size: 0.9rem;">1 / 4</div>
+            <button class="btn btn-secondary" onclick="nextSlide()">次のスライド ▶</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    let ws = null;
+    let botsData = [];
+    let currentSlides = [];
+    let currentSlideIdx = 0;
+
+    function initWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        document.getElementById('connectionBadge').style.borderColor = 'rgba(16, 185, 129, 0.4)';
+        document.getElementById('connectionText').innerText = '接続完了 (41 AI Active)';
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'init') {
+            botsData = msg.bots || [];
+            renderBotGrid();
+            renderCommanderReports(msg.reports || {});
+            drawRadarMap();
+          } else if (msg.type === 'bot_update') {
+            updateBot(msg.data);
+          } else if (msg.type === 'chat_message') {
+            appendChat(msg.data);
+          } else if (msg.type === 'new_log') {
+            appendLog(msg.data);
+          } else if (msg.type === 'new_report') {
+            renderExecutiveReport(msg.data);
+          }
+        } catch (_) {}
+      };
+
+      ws.onclose = () => {
+        document.getElementById('connectionBadge').style.borderColor = 'rgba(239, 68, 68, 0.4)';
+        document.getElementById('connectionText').innerText = '再接続待機中...';
+        setTimeout(initWebSocket, 3000);
+      };
+    }
+
+    function switchTab(tabId) {
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
+      event.currentTarget.classList.add('active');
+      const pane = document.getElementById('tab-' + tabId);
+      if (pane) pane.classList.add('active');
+
+      if (tabId === 'map') drawRadarMap();
+      if (tabId === 'database') queryDatabase();
+      if (tabId === 'chests') fetchChests();
+      if (tabId === 'farm-ranch') fetchFarmRanch();
+      if (tabId === 'diaries') loadDiaries();
+      if (tabId === 'proposals') fetchProposals();
+      if (tabId === 'commanders') fetchCommanders();
+    }
+
+    async function fetchStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        if (data.success) {
+          const s = data.stats;
+          document.getElementById('statActiveBots').innerText = `${s.activeBots || 41} / 41`;
+          document.getElementById('statTps').innerText = (data.serverStatus?.tps || 20.0).toFixed(1);
+          document.getElementById('statHarvestTotal').innerText = (s.totalHarvest || 0).toLocaleString();
+          document.getElementById('statFarmPlots').innerText = s.farmPlots || 0;
+          document.getElementById('statRanchTotal').innerText = s.ranchTotal || 0;
+          document.getElementById('statProposals').innerText = s.proposalsCount || 0;
+        }
+      } catch (_) {}
+    }
+
+    function renderBotGrid() {
+      const container = document.getElementById('botGrid');
+      const filter = (document.getElementById('botFilterInput')?.value || '').toLowerCase();
+      const filtered = botsData.filter(b => 
+        (b.displayName || b.name).toLowerCase().includes(filter) || 
+        (b.roleName || '').toLowerCase().includes(filter) ||
+        (b.category || '').toLowerCase().includes(filter)
+      );
+
+      container.innerHTML = filtered.map(b => {
+        const hp = b.health !== undefined ? b.health : 20;
+        const food = b.food !== undefined ? b.food : 20;
+        const color = getCategoryColor(b.category);
+        return `
+          <div class="bot-card" onclick="selectBotForMap('${b.id}')">
+            <div class="bot-card-header">
+              <span class="bot-name">
+                <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:${color};"></span>
+                ${b.displayName || b.name}
+              </span>
+              <span class="role-badge" style="background:${color}22; color:${color}; border:1px solid ${color}44;">
+                ${b.roleName || b.category}
+              </span>
+            </div>
+            <div class="bot-bars">
+              <div class="bar-row">
+                <span>HP</span>
+                <div class="progress-bar-bg">
+                  <div class="progress-bar-fill" style="width:${(hp/20)*100}%; background:#ef4444;"></div>
+                </div>
+                <span>${Math.round(hp)}</span>
+              </div>
+              <div class="bar-row">
+                <span>満腹</span>
+                <div class="progress-bar-bg">
+                  <div class="progress-bar-fill" style="width:${(food/20)*100}%; background:#f59e0b;"></div>
+                </div>
+                <span>${Math.round(food)}</span>
+              </div>
+            </div>
+            <div class="bot-coord">XYZ: ${Math.round(b.x || 95)}, ${Math.round(b.y || 63)}, ${Math.round(b.z || 43)}</div>
+            <div class="bot-task">📌 ${b.currentTask || '通常自律行動中'}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function getCategoryColor(cat) {
+      switch (cat) {
+        case 'combat': return '#ef4444';
+        case 'gathering': return '#10b981';
+        case 'farming': return '#f59e0b';
+        case 'fishing': return '#06b6d4';
+        case 'mining': return '#6366f1';
+        case 'nether': return '#a855f7';
+        case 'hunting':
+        case 'breeding': return '#ec4899';
+        case 'commander': return '#eab308';
+        case 'special':
+        case 'companion': return '#38bdf8';
+        default: return '#94a3b8';
+      }
+    }
+
+    // レーダーマップ描画
+    function drawRadarMap() {
+      const canvas = document.getElementById('radarCanvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+
+      ctx.fillStyle = '#080c14';
+      ctx.fillRect(0, 0, w, h);
+
+      // 中心座標: 拠点 (95, 43)
+      const centerX = 95;
+      const centerZ = 43;
+      const scale = 2.4; // 1ブロックあたりのピクセル
+
+      const toScreenX = (x) => (w / 2) + (x - centerX) * scale;
+      const toScreenY = (z) => (h / 2) + (z - centerZ) * scale;
+
+      // グリッド線
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
+      ctx.lineWidth = 1;
+      for (let x = -200; x <= 350; x += 32) {
+        ctx.beginPath();
+        ctx.moveTo(toScreenX(x), 0);
+        ctx.lineTo(toScreenX(x), h);
+        ctx.stroke();
+      }
+      for (let z = -150; z <= 250; z += 32) {
+        ctx.beginPath();
+        ctx.moveTo(0, toScreenY(z));
+        ctx.lineTo(w, toScreenY(z));
+        ctx.stroke();
+      }
+
+      // 拠点エリア (X: 92~97, Z: 39~47)
+      ctx.fillStyle = 'rgba(99, 102, 241, 0.2)';
+      ctx.strokeStyle = '#6366f1';
+      ctx.lineWidth = 2;
+      const bLeft = toScreenX(92);
+      const bTop = toScreenY(39);
+      const bW = (97 - 92) * scale;
+      const bH = (47 - 39) * scale;
+      ctx.fillRect(bLeft, bTop, bW, bH);
+      ctx.strokeRect(bLeft, bTop, bW, bH);
+
+      ctx.fillStyle = '#a5b4fc';
+      ctx.font = '11px sans-serif';
+      ctx.fillText('🏡 拠点 (95, 43)', bLeft - 10, bTop - 8);
+
+      // 水中迎撃エリア (X: 95~125, Z: 40~75)
+      ctx.fillStyle = 'rgba(6, 182, 212, 0.12)';
+      ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
+      ctx.fillRect(toScreenX(95), toScreenY(40), (125-95)*scale, (75-40)*scale);
+      ctx.strokeRect(toScreenX(95), toScreenY(40), (125-95)*scale, (75-40)*scale);
+      ctx.fillStyle = '#67e8f9';
+      ctx.fillText('🌊 水中迎撃域', toScreenX(96), toScreenY(46));
+
+      // 荒廃ポータル (278, 94)
+      const pX = toScreenX(278);
+      const pY = toScreenY(94);
+      ctx.fillStyle = '#a855f7';
+      ctx.beginPath();
+      ctx.arc(pX, pY, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillText('🔮 ネザーポータル (278, 94)', pX - 40, pY - 12);
+
+      // 全ボットのプロット
+      botsData.forEach(b => {
+        const bx = toScreenX(b.x || 95);
+        const bz = toScreenY(b.z || 43);
+        const col = getCategoryColor(b.category);
+
+        ctx.fillStyle = col;
+        ctx.beginPath();
+        ctx.arc(bx, bz, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#f8fafc';
+        ctx.font = '10px sans-serif';
+        ctx.fillText(b.displayName || b.name, bx + 7, bz + 3);
+      });
+    }
+
+    function selectBotForMap(botId) {
+      const b = botsData.find(x => x.id === botId);
+      if (!b) return;
+      document.getElementById('mapSelectedBot').innerHTML = `
+        <div style="background:rgba(255,255,255,0.05); padding:10px; border-radius:6px; border-left:3px solid ${getCategoryColor(b.category)};">
+          <b>${b.displayName || b.name}</b> (${b.roleName})<br>
+          座標: X:${Math.round(b.x || 95)}, Y:${Math.round(b.y || 63)}, Z:${Math.round(b.z || 43)}<br>
+          HP: ${b.health || 20}/20 | 満腹度: ${b.food || 20}/20<br>
+          任務: ${b.currentTask || '通常自律行動'}
+        </div>
+      `;
+    }
+
+    async function fetchLogs() {
+      const cat = document.getElementById('logCategorySelect').value;
+      const res = await fetch(`/api/logs?category=${cat}&limit=80`);
+      const data = await res.json();
+      if (data.success) {
+        const box = document.getElementById('terminalBox');
+        box.innerHTML = data.logs.map(l => `
+          <div class="log-line">
+            <span class="log-time">[${new Date(l.timestamp).toLocaleTimeString()}]</span>
+            <span class="log-tag tag-${l.category}">${l.category.toUpperCase()}</span>
+            <b>[${l.botId}]:</b>
+            <span>${l.message}</span>
+          </div>
+        `).join('');
+      }
+    }
+
+    async function fetchCommanders() {
+      const res = await fetch('/api/command-reports');
+      const data = await res.json();
+      if (data.success) {
+        renderCommanderReports(data.reports);
+      }
+    }
+
+    function renderCommanderReports(reports) {
+      const container = document.getElementById('commanderGrid');
+      if (!container) return;
+      const keys = Object.keys(reports);
+      if (keys.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);">司令塔からの報告を待機中...</div>';
+        return;
+      }
+      container.innerHTML = keys.map(k => {
+        const r = reports[k];
+        return `
+          <div class="commander-card">
+            <h3 style="font-size:1.05rem; font-weight:700; color:#fde047; margin-bottom:8px;">
+              🎖️ ${r.displayName || r.roleName || k}
+            </h3>
+            <div style="font-size:0.85rem; color:#e2e8f0; line-height:1.6; margin-bottom:10px;">
+              ${r.summary || r.status || '担当現場の作業員と定期連携中。'}
+            </div>
+            <div style="font-size:0.75rem; color:var(--text-muted); display:flex; justify-content:space-between;">
+              <span>回収資材: ${r.harvestedCount || 0} 個</span>
+              <span>最終更新: ${r.updatedAt ? new Date(r.updatedAt).toLocaleTimeString() : '先ほど'}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function fetchProposals() {
+      const res = await fetch('/api/proposals');
+      const data = await res.json();
+      if (data.success) {
+        renderProposals(data.proposals);
+      }
+    }
+
+    function renderProposals(proposals) {
+      const container = document.getElementById('proposalsList');
+      if (!proposals || proposals.length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);">まだ改善提案がありません。「最新日誌から再分析」ボタンを押してください。</div>';
+        return;
+      }
+      container.innerHTML = proposals.map(p => `
+        <div class="proposal-card">
+          <div class="proposal-title">💡 ${p.title}</div>
+          <div style="font-size:0.85rem; margin-bottom:8px;"><b>対象分野:</b> ${p.targetArea}</div>
+          <div style="font-size:0.85rem; margin-bottom:6px; color:#fca5a5;"><b>課題:</b> ${p.issue}</div>
+          <div style="font-size:0.85rem; margin-bottom:6px; color:#cbd5e1;"><b>提案手順:</b> ${p.solution}</div>
+          <div style="font-size:0.85rem; margin-bottom:12px; color:#86efac;"><b>期待効果:</b> ${p.expectedOutcome}</div>
+          <button class="btn btn-primary" onclick="executeProposalCommand('${escapeQuotes(p.command)}')">
+            ⚡ この指示を各部隊へ即時発注
+          </button>
+        </div>
+      `).join('');
+    }
+
+    function escapeQuotes(str) {
+      return (str || '').replace(/'/g, "\\'").replace(/"/g, '&quot;');
+    }
+
+    async function executeProposalCommand(cmd) {
+      if (!cmd) return;
+      await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: cmd })
+      });
+      alert('指示を各部隊へ発注しました！');
+    }
+
+    async function generateProposals() {
+      const btn = event.currentTarget;
+      btn.innerText = '⏳ Qwen 2.5 で分析中...';
+      btn.disabled = true;
+      try {
+        const res = await fetch('/api/proposals/generate', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+          renderProposals(data.proposals);
+        }
+      } finally {
+        btn.innerText = '🔄 最新日誌から再分析・改善提案を生成';
+        btn.disabled = false;
+      }
+    }
+
+    async function generateReport() {
+      const res = await fetch('/api/reports/generate', { method: 'POST' });
+      const data = await res.json();
+      if (data.success && data.report) {
+        renderExecutiveReport(data.report);
+      }
+    }
+
+    function renderExecutiveReport(report) {
+      currentSlides = report.slides || [];
+      currentSlideIdx = 0;
+      showSlide(currentSlideIdx);
+    }
+
+    function showSlide(idx) {
+      if (!currentSlides || currentSlides.length === 0) return;
+      if (idx < 0) idx = 0;
+      if (idx >= currentSlides.length) idx = currentSlides.length - 1;
+      currentSlideIdx = idx;
+
+      const s = currentSlides[idx];
+      document.getElementById('slideNumber').innerText = `SLIDE ${idx + 1} / ${currentSlides.length}`;
+      document.getElementById('slideTitle').innerText = s.slideTitle;
+      document.getElementById('slideSubtitle').innerText = s.subtitle || '';
+      document.getElementById('slideBullets').innerHTML = (s.bulletPoints || []).map(b => `<li>${b}</li>`).join('');
+      document.getElementById('slideNotesText').innerText = s.speakerNotes || 'ナレーション原稿なし';
+      document.getElementById('slideCounter').innerText = `${idx + 1} / ${currentSlides.length}`;
+    }
+
+    function nextSlide() { showSlide(currentSlideIdx + 1); }
+    function prevSlide() { showSlide(currentSlideIdx - 1); }
+
+    async function sendChat() {
+      const input = document.getElementById('chatInput');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+
+      appendChat({ sender: 'User', message: text, time: new Date().toLocaleTimeString() });
+
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: text })
+      });
+      const data = await res.json();
+      if (data.success && data.reply) {
+        appendChat({ sender: data.reply.sender || 'AI', message: data.reply.reply || data.reply.message, time: new Date().toLocaleTimeString() });
+      }
+    }
+
+    function addMention(m) {
+      const input = document.getElementById('chatInput');
+      input.value = m + ' ' + input.value;
+      input.focus();
+    }
+
+    function appendChat(msg) {
+      const box = document.getElementById('chatBox');
+      const isUser = msg.sender === 'User';
+      const el = document.createElement('div');
+      el.className = `chat-msg ${isUser ? 'chat-user' : 'chat-bot'}`;
+      el.innerHTML = `
+        <div class="chat-sender">${msg.sender} <span style="font-weight:400; font-size:0.7rem; color:var(--text-dim);">${msg.time || ''}</span></div>
+        <div>${msg.message}</div>
+      `;
+      box.appendChild(el);
+      box.scrollTop = box.scrollHeight;
+    }
+
+    async function sendQuickCommand(cmd) {
+      await fetch('/api/command', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cmd })
+      });
+    }
+
+    async function sendConsoleCommand() {
+      const input = document.getElementById('consoleInput');
+      const cmd = input.value.trim();
+      if (!cmd) return;
+      input.value = '';
+      await sendQuickCommand(cmd);
+    }
+
+    async function fetchChests() {
+      const res = await fetch('/api/chests');
+      const data = await res.json();
+      const container = document.getElementById('chestList');
+      if (!data.success || Object.keys(data.chests).length === 0) {
+        container.innerHTML = '<div style="color:var(--text-muted);">まだスキャンされた拠点チェストがありません。司令塔がチェストにアクセスすると表示されます。</div>';
+        return;
+      }
+      container.innerHTML = Object.entries(data.chests).map(([pos, c]) => `
+        <div style="margin-bottom:20px;">
+          <h4 style="font-size:0.95rem;">📦 チェスト (${pos}) - 空きスロット: ${c.freeSlots || 0}</h4>
+          <div class="chest-grid">
+            ${(c.items || []).map(item => `
+              <div class="chest-slot" title="${item.name}">
+                <span>${item.displayName || item.name}</span>
+                <span class="slot-count">${item.count > 1 ? item.count : ''}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      `).join('');
+    }
+
+    async function fetchFarmRanch() {
+      const res = await fetch('/api/farm-ranch');
+      const data = await res.json();
+      if (data.success) {
+        const f = data.farm;
+        document.getElementById('farmContent').innerHTML = `
+          <div><b>耕作地マス数:</b> ${f.tilledPlots} ブロック</div>
+          <div><b>収穫累計:</b> ${f.harvestTotal} 個</div>
+          <div style="margin-top:10px;">
+            🌾 小麦: ${f.crops?.wheat || 0} | 🥕 ニンジン: ${f.crops?.carrot || 0} | 🥔 ジャガイモ: ${f.crops?.potato || 0}
+          </div>
+        `;
+        const r = data.ranch;
+        document.getElementById('ranchContent').innerHTML = `
+          <div><b>飼育ペン数:</b> ${(r.pens || []).length} 箇所</div>
+          <div><b>現在頭数:</b> 🐄 牛:${r.animals?.cow||0} | 🐑 羊:${r.animals?.sheep||0} | 🐖 豚:${r.animals?.pig||0} | 🐔 鶏:${r.animals?.chicken||0}</div>
+          <div><b>累計繁殖回数:</b> ${(Object.values(r.bredCount||{})).reduce((a,b)=>a+b,0)} 回</div>
+        `;
+      }
+    }
+
+    async function loadDiaries() {
+      const res = await fetch('/api/diaries');
+      const data = await res.json();
+      const sel = document.getElementById('diaryBotSelect');
+      if (data.success) {
+        sel.innerHTML = data.diaries.map(d => `<option value="${d.role}">${d.role} の行動日誌</option>`).join('');
+        if (data.diaries.length > 0) {
+          document.getElementById('diaryContent').innerText = data.diaries[0].content;
+        }
+      }
+    }
+
+    async function loadSelectedDiary() {
+      const role = document.getElementById('diaryBotSelect').value;
+      const res = await fetch(`/api/diaries?botId=${role}`);
+      const data = await res.json();
+      if (data.success && data.diaries.length > 0) {
+        document.getElementById('diaryContent').innerText = data.diaries[0].content;
+      }
+    }
+
+    async function queryDatabase() {
+      const table = document.getElementById('dbTableSelect').value;
+      const res = await fetch(`/api/db/query?table=${table}&limit=50`);
+      const data = await res.json();
+      const thead = document.getElementById('dbTableHead');
+      const tbody = document.getElementById('dbTableBody');
+
+      if (!data.success || !data.rows || data.rows.length === 0) {
+        thead.innerHTML = '<tr><th>情報</th></tr>';
+        tbody.innerHTML = '<tr><td style="color:var(--text-muted);">データがありません</td></tr>';
+        return;
+      }
+
+      const cols = Object.keys(data.rows[0]);
+      thead.innerHTML = `<tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr>`;
+      tbody.innerHTML = data.rows.map(r => `
+        <tr>${cols.map(c => `<td>${typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c]}</td>`).join('')}</tr>
+      `).join('');
+    }
+
+    // 初期起動
+    window.addEventListener('DOMContentLoaded', () => {
+      initWebSocket();
+      fetchStats();
+      setInterval(fetchStats, 5000);
+      setInterval(drawRadarMap, 2000);
+    });
+  </script>
+</body>
+</html>
