@@ -53,6 +53,49 @@ def find_xserver_key():
             return str(p)
     return None
 
+OLD_4AI_LOGS = [
+    "ChatGPT_diary.md",
+    "Claude_diary.md",
+    "Gemini_diary.md",
+    "Grok_diary.md",
+    "survival_diary_combined.md"
+]
+
+def purge_old_4ai_logs():
+    """旧4AI体制の日誌および統合ログをローカルとGoogle Driveの両方から完全に消去"""
+    for log_dir in [LOGS_DIR, SERVER_DIR / "logs", GDRIVE_DIR / "logs"]:
+        if log_dir.exists():
+            for fname in OLD_4AI_LOGS:
+                fpath = log_dir / fname
+                if fpath.exists():
+                    try:
+                        fpath.unlink()
+                        log(f"🗑️ 旧日誌を完全消去: {fpath}")
+                    except Exception:
+                        pass
+
+def enforce_server_config():
+    """復元されたserver.propertiesのmax-players=100を強制維持"""
+    sp_path = SERVER_DIR / "server.properties"
+    if sp_path.exists():
+        try:
+            content = sp_path.read_text(encoding="utf-8")
+            lines = content.splitlines()
+            new_lines = []
+            has_max = False
+            for line in lines:
+                if line.startswith("max-players="):
+                    new_lines.append("max-players=100")
+                    has_max = True
+                else:
+                    new_lines.append(line)
+            if not has_max:
+                new_lines.append("max-players=100")
+            sp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            log("🛡️ server.properties の max-players=100 を確認・維持しました。")
+        except Exception as e:
+            log(f"⚠️ server.properties 更新警告: {e}")
+
 def clean_old_world_and_logs():
     """Minecraftのワールドを再生成し、既存の行動日誌やログを削除"""
     log("🧹 ワールド再生成指示に基づき、旧ワールドデータおよび旧日誌・ログを完全初期化中...")
@@ -66,6 +109,8 @@ def clean_old_world_and_logs():
                 if f.is_file(): f.unlink()
                 elif f.is_dir(): shutil.rmtree(f)
             except Exception: pass
+    # Google Drive 側の旧ログも消去
+    purge_old_4ai_logs()
     log("✅ ワールド初期化完了。新規ワールドが自動生成されます。")
 
 def restore_from_storage():
@@ -76,6 +121,7 @@ def restore_from_storage():
         clean_old_world_and_logs()
         return False
 
+    restored = False
     # 1. Google Drive からの復元確認
     if GDRIVE_DIR.exists():
         archives = sorted(GDRIVE_DIR.glob("mc_world_*.tar.gz"), key=os.path.getmtime, reverse=True)
@@ -88,30 +134,36 @@ def restore_from_storage():
                 except TypeError:
                     tar.extractall(path=SERVER_DIR)
             log("✅ Google Driveからワールド復元完了。")
-            return True
+            restored = True
 
     # 2. XServer からの復元確認
-    key_path = find_xserver_key()
-    if key_path and XSERVER_HOST and XSERVER_USER:
-        log(f"XServer ({XSERVER_HOST}) からの復元を試行中...")
-        temp_tar = Path("/tmp/mc_restore_xserver.tar.gz")
-        scp_cmd = [
-            "scp", "-P", str(XSERVER_PORT), "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
-            f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/mc_world_latest.tar.gz",
-            str(temp_tar)
-        ]
-        try:
-            subprocess.run(scp_cmd, check=True)
-            if temp_tar.exists() and temp_tar.stat().st_size > 0:
-                with tarfile.open(temp_tar, "r:gz") as tar:
-                    tar.extractall(path=SERVER_DIR)
-                log("✅ XServerからワールド復元完了。")
-                return True
-        except Exception as e:
-            log(f"XServerからの復元スキップ: {e}")
+    if not restored:
+        key_path = find_xserver_key()
+        if key_path and XSERVER_HOST and XSERVER_USER:
+            log(f"XServer ({XSERVER_HOST}) からの復元を試行中...")
+            temp_tar = Path("/tmp/mc_restore_xserver.tar.gz")
+            scp_cmd = [
+                "scp", "-P", str(XSERVER_PORT), "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
+                f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/mc_world_latest.tar.gz",
+                str(temp_tar)
+            ]
+            try:
+                subprocess.run(scp_cmd, check=True)
+                if temp_tar.exists() and temp_tar.stat().st_size > 0:
+                    with tarfile.open(temp_tar, "r:gz") as tar:
+                        tar.extractall(path=SERVER_DIR)
+                    log("✅ XServerからワールド復元完了。")
+                    restored = True
+            except Exception as e:
+                log(f"XServerからの復元スキップ: {e}")
 
-    log("新規ワールドでサーバーを開始します。")
-    return False
+    # 復元後の整合性担保 (旧ログ排除 & 人数上限100保証)
+    purge_old_4ai_logs()
+    enforce_server_config()
+
+    if not restored:
+        log("新規ワールドでサーバーを開始します。")
+    return restored
 
 def restore_cache():
     """node_modulesやLLMキャッシュを高速復元して起動時間を短縮"""
@@ -175,6 +227,7 @@ def backup_to_gdrive():
         log("サーバーディレクトリが存在しません。")
         return None
 
+    purge_old_4ai_logs()
     GDRIVE_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     archive_name = f"mc_world_{timestamp}.tar.gz"

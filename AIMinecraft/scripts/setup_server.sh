@@ -52,6 +52,26 @@ settings:
   connection-throttle: -1
 EOF
 
+# spigot.yml 最適化 (タイムアウト時間の拡大)
+cat << 'EOF' > spigot.yml
+settings:
+  timeout-time: 180
+  restart-on-crash: false
+EOF
+
+# PaperMC / Purpur グローバル設定 (パケット制限・ユーザー名検証の緩和)
+mkdir -p config
+cat << 'EOF' > config/paper-global.yml
+unsupported-settings:
+  perform-username-validation: false
+packet-limiter:
+  kick-message: 'Kicked for spamming packets'
+  limits:
+    all:
+      interval: 10.0
+      max-packet-rate: 2500.0
+EOF
+
 echo "=== [3/4] PaperMC / Purpur (Java 21 最適化サーバー 1.21.1) の準備 ==="
 if [ ! -f "server.jar" ] || [ ! -s "server.jar" ]; then
     echo "最新高速サーバー (Purpur/Paper 1.21.1) をダウンロード中..."

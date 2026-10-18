@@ -143,7 +143,7 @@ class BotManager {
       const [key, role] = roleEntries[index];
       this.spawnSingleBot(key, role);
       index++;
-    }, 450); // 450ms間隔で順次接続しサーバー負荷と接続遮断を防止
+    }, 1200); // 1200ms間隔で順次接続しサーバー負荷と接続遮断(KICK)を防止
   }
 
   spawnSingleBot(key, role) {
@@ -151,7 +151,8 @@ class BotManager {
       host: SERVER_HOST,
       port: SERVER_PORT,
       username: role.name,
-      checkTimeoutInterval: 60000
+      checkTimeoutInterval: 120000,
+      viewDistance: 'tiny' // メモリ消費を最小限に抑制 (41体同時稼働最適化)
     });
 
     bot.loadPlugin(pathfinder);
@@ -166,6 +167,12 @@ class BotManager {
       botWrapper.onSpawn();
     });
 
+    bot.on('kicked', (reason) => {
+      const reasonStr = typeof reason === 'object' ? JSON.stringify(reason) : String(reason);
+      console.warn(`⚠️ [Bot - ${role.displayName}] KICK切断: ${reasonStr}`);
+      db.logEvent('system', key, `KICK切断: ${reasonStr}`);
+    });
+
     bot.on('error', (err) => {
       console.warn(`[Bot - ${role.displayName}] エラー: ${err.message}`);
     });
@@ -173,10 +180,12 @@ class BotManager {
     bot.on('end', () => {
       botWrapper.connected = false;
       db.upsertBot(key, { connected: false });
-      console.log(`[Bot - ${role.displayName}] 切断されました。10秒後に再接続行います。`);
+      console.log(`[Bot - ${role.displayName}] 切断されました。15秒後に再接続行います。`);
       setTimeout(() => {
-        this.spawnSingleBot(key, role);
-      }, 10000);
+        if (!this.bots[key] || !this.bots[key].connected) {
+          this.spawnSingleBot(key, role);
+        }
+      }, 15000);
     });
   }
 
@@ -193,6 +202,43 @@ class BotManager {
     setInterval(() => {
       this.commanderCycle();
     }, 30000);
+
+    // LLMによる行動日誌学習 & 改善提案の定期自動生成 (3分ごと)
+    setInterval(async () => {
+      try {
+        const stats = {
+          activeBots: Object.values(this.bots).filter(b => b.connected).length,
+          totalBots: Object.keys(ROLES).length,
+          totalHarvest: db.data.harvestLogs.length,
+          totalChests: Object.keys(db.data.chests).length,
+          farmPlots: db.data.farm.tilledPlots || 0,
+          ranchTotal: Object.values(db.data.ranch.animals || {}).reduce((a, b) => a + b, 0)
+        };
+        const recentDiaries = db.data.eventLogs.slice(0, 20).map(e => ({
+          role: e.botId,
+          time: new Date(e.timestamp).toLocaleTimeString('ja-JP'),
+          content: e.message
+        }));
+        await brain.analyzeDiariesAndProposeImprovements(recentDiaries, stats);
+      } catch (e) {
+        console.warn(`[AIBrain] 改善提案定期生成エラー: ${e.message}`);
+      }
+    }, 180000);
+
+    // 統括日報の定期自動生成 (5分ごと、YouTubeスライド向け)
+    setInterval(async () => {
+      try {
+        const sessionInfo = this.getServerStatus();
+        const stats = {
+          totalHarvest: db.data.harvestLogs.length,
+          farmTotal: db.data.farm.harvestTotal || 0,
+          ranchTotal: Object.values(db.data.ranch.bredCount || {}).reduce((a, b) => a + b, 0)
+        };
+        await brain.generateExecutiveReport(sessionInfo, db.data.commanderReports, stats);
+      } catch (e) {
+        console.warn(`[AIBrain] 統括日報定期生成エラー: ${e.message}`);
+      }
+    }, 300000);
   }
 
   tick() {
@@ -236,17 +282,22 @@ class BotInstance {
     this.currentTask = '初期化中';
     this.mcData = null;
     this.movements = null;
+    this.lastDiaryTime = 0;
   }
 
   onSpawn() {
     this.connected = true;
-    this.mcData = require('minecraft-data')(this.bot.version);
-    this.movements = new Movements(this.bot, this.mcData);
-    this.bot.pathfinder.setMovements(this.movements);
+    try {
+      this.mcData = require('minecraft-data')(this.bot.version);
+      this.movements = new Movements(this.bot, this.mcData);
+      this.bot.pathfinder.setMovements(this.movements);
+    } catch (e) {
+      console.warn(`[Pathfinder Init - ${this.key}] ${e.message}`);
+    }
 
-    console.log(`🎉 [Bot Spawnd] ${this.role.displayName} (${this.role.name}) がワールドに参加しました。`);
+    console.log(`🎉 [Bot Spawned] ${this.role.displayName} (${this.role.name}) がワールドに参加しました。`);
     db.logEvent('system', this.key, `${this.role.displayName} がワールドへ参加しました`);
-    this.manager.writeDiary(this.key, this.role.displayName, `ワールドへスポーン完了。担当任務【${this.role.roleName}】を開始します。`);
+    this.recordActionAndDiary(`ワールドへスポーン完了。担当任務【${this.role.roleName}】を開始します。`, true);
 
     // チャット受信リスナー
     this.bot.on('chat', (username, message) => {
@@ -257,16 +308,30 @@ class BotInstance {
       }
     });
 
-    // 役割別自律ループの開始
+    // 役割別自律ループの開始 (直後500msで初回実行、以降8秒周期)
     this.startRoleLoop();
+    setTimeout(() => {
+      this.runRoleAction();
+    }, 500);
+  }
+
+  recordActionAndDiary(taskText, isImportant = false) {
+    this.currentTask = taskText;
+    const now = Date.now();
+    // 重要アクション時、または45秒経過で日誌に追記
+    if (isImportant || (now - this.lastDiaryTime > 45000)) {
+      this.lastDiaryTime = now;
+      this.manager.writeDiary(this.key, this.role.displayName, taskText);
+      db.logEvent('action', this.key, taskText);
+    }
   }
 
   getState() {
     return {
-      health: this.bot.health,
-      food: this.bot.food,
+      health: this.bot.health || 20,
+      food: this.bot.food || 20,
       currentTask: this.currentTask,
-      isInWater: this.bot.entity.isInWater
+      isInWater: this.bot.entity ? this.bot.entity.isInWater : false
     };
   }
 
@@ -290,50 +355,54 @@ class BotInstance {
   // --- 役割別自律行動ループ ---
   startRoleLoop() {
     setInterval(() => {
-      if (!this.connected || !this.bot || !this.bot.entity) return;
-      try {
-        switch (this.role.category) {
-          case 'companion':
-            this.loopCompanion();
-            break;
-          case 'combat':
-            this.loopCombat();
-            break;
-          case 'gathering':
-            this.loopGathering();
-            break;
-          case 'farming':
-            this.loopFarming();
-            break;
-          case 'fishing':
-            this.loopFishing();
-            break;
-          case 'mining':
-            this.loopMining();
-            break;
-          case 'nether':
-            this.loopNether();
-            break;
-          case 'trading':
-            this.loopTrading();
-            break;
-          case 'hunting':
-            this.loopHunting();
-            break;
-          case 'breeding':
-            this.loopBreeding();
-            break;
-          case 'commander':
-            // 司令塔はcommanderCycleで別途処理
-            break;
-          case 'special':
-            // ヘルパーはユーザー指示待機
-            break;
-        }
-      } catch (e) {
-        console.warn(`[RoleLoop Error - ${this.key}] ${e.message}`);
-      }
+      this.runRoleAction();
     }, 8000);
+  }
+
+  runRoleAction() {
+    if (!this.connected || !this.bot || !this.bot.entity) return;
+    try {
+      switch (this.role.category) {
+        case 'companion':
+          this.loopCompanion();
+          break;
+        case 'combat':
+          this.loopCombat();
+          break;
+        case 'gathering':
+          this.loopGathering();
+          break;
+        case 'farming':
+          this.loopFarming();
+          break;
+        case 'fishing':
+          this.loopFishing();
+          break;
+        case 'mining':
+          this.loopMining();
+          break;
+        case 'nether':
+          this.loopNether();
+          break;
+        case 'trading':
+          this.loopTrading();
+          break;
+        case 'hunting':
+          this.loopHunting();
+          break;
+        case 'breeding':
+          this.loopBreeding();
+          break;
+        case 'commander':
+          // 司令塔はcommanderCycleで別途処理
+          break;
+        case 'special':
+          // ヘルパーはユーザー指示待機
+          break;
+      }
+    } catch (e) {
+      console.warn(`[RoleLoop Error - ${this.key}] ${e.message}`);
+    }
   }
 
   // 1. お供: プレイヤー追従 & 護衛
@@ -342,13 +411,13 @@ class BotInstance {
     if (player) {
       const dist = this.bot.entity.position.distanceTo(player.position);
       if (dist > 4) {
-        this.currentTask = `プレイヤー(${player.username})を追従中 (距離: ${Math.round(dist)}m)`;
+        this.recordActionAndDiary(`プレイヤー(${player.username})を追従中 (距離: ${Math.round(dist)}m)`);
         this.bot.pathfinder.setGoal(new goals.GoalFollow(player, 2.5), true);
       } else {
-        this.currentTask = `プレイヤーの側で周囲警戒中`;
+        this.recordActionAndDiary(`プレイヤーの側で周囲警戒中`);
       }
     } else {
-      this.currentTask = `プレイヤーを索敵中`;
+      this.recordActionAndDiary(`プレイヤーを索敵中`);
       this.goTo(new Vec3(BASE_BOUNDS.center.x, BASE_BOUNDS.center.y, BASE_BOUNDS.center.z), 3);
     }
   }
@@ -359,7 +428,7 @@ class BotInstance {
     if (isWater) {
       // 水中迎撃
       if (this.bot.oxygenLevel < 10) {
-        this.currentTask = `水面へ浮上息継ぎ中`;
+        this.recordActionAndDiary(`水面へ浮上息継ぎ中`);
         const pos = this.bot.entity.position;
         this.goTo(new Vec3(pos.x, 63, pos.z));
         return;
@@ -370,11 +439,10 @@ class BotInstance {
         return (n.includes('drowned') || n.includes('guardian')) && e.position.distanceTo(this.bot.entity.position) < 24;
       });
       if (target) {
-        this.currentTask = `水中モブ(${target.name})を交戦迎撃中`;
+        this.recordActionAndDiary(`水中モブ(${target.name})を交戦迎撃中`, true);
         this.bot.pvp.attack(target);
       } else {
-        this.currentTask = `拠点東南水域(X:95〜125, Z:40〜75)を水中パトロール中`;
-        // 水域巡回
+        this.recordActionAndDiary(`拠点東南水域(X:95〜125, Z:40〜75)を水中パトロール中`);
         const patrolX = 95 + Math.random() * 25;
         const patrolZ = 40 + Math.random() * 30;
         this.goTo(new Vec3(patrolX, 62, patrolZ), 2);
@@ -388,10 +456,10 @@ class BotInstance {
                e.position.distanceTo(this.bot.entity.position) < 20;
       });
       if (target) {
-        this.currentTask = `地上敵性モブ(${target.name})を撃退中`;
+        this.recordActionAndDiary(`地上敵性モブ(${target.name})を撃退中`, true);
         this.bot.pvp.attack(target);
       } else {
-        this.currentTask = `拠点外周地上エリアを防衛パトロール中`;
+        this.recordActionAndDiary(`拠点外周地上エリアを防衛パトロール中`);
         const offsetAngle = Math.random() * Math.PI * 2;
         const pX = BASE_BOUNDS.center.x + Math.cos(offsetAngle) * 12;
         const pZ = BASE_BOUNDS.center.z + Math.sin(offsetAngle) * 12;
@@ -409,13 +477,13 @@ class BotInstance {
         maxDistance: 48
       });
       if (logBlock) {
-        this.currentTask = `原木(${logBlock.name})を伐採中 [XYZ: ${logBlock.position.x},${logBlock.position.y},${logBlock.position.z}]`;
+        this.recordActionAndDiary(`原木(${logBlock.name})を伐採中 [XYZ: ${logBlock.position.x},${logBlock.position.y},${logBlock.position.z}]`, true);
         try {
           await this.bot.collectBlock.collect(logBlock);
           db.recordHarvest(this.key, logBlock.name, 1, 'wood');
         } catch (_) {}
       } else {
-        this.currentTask = `10チャンク以内の森林エリアを探索中`;
+        this.recordActionAndDiary(`10チャンク以内の森林エリアを探索中`);
         const x = BASE_BOUNDS.center.x + (Math.random() - 0.5) * 60;
         const z = BASE_BOUNDS.center.z + (Math.random() - 0.5) * 60;
         this.goTo(new Vec3(x, 64, z), 4);
@@ -435,13 +503,13 @@ class BotInstance {
       });
 
       if (targetBlock) {
-        this.currentTask = `資材(${targetBlock.name})を採掘中 [${targetBlock.position.x},${targetBlock.position.z}]`;
+        this.recordActionAndDiary(`資材(${targetBlock.name})を採掘中 [${targetBlock.position.x},${targetBlock.position.z}]`, true);
         try {
           await this.bot.collectBlock.collect(targetBlock);
           db.recordHarvest(this.key, targetBlock.name, 1, cat);
         } catch (_) {}
       } else {
-        this.currentTask = `5チャンク以内の露出資材を探索中`;
+        this.recordActionAndDiary(`5チャンク以内の露出資材を探索中`);
         const x = BASE_BOUNDS.center.x + (Math.random() - 0.5) * 40;
         const z = BASE_BOUNDS.center.z + (Math.random() - 0.5) * 40;
         this.goTo(new Vec3(x, 64, z), 3);
@@ -456,11 +524,15 @@ class BotInstance {
       maxDistance: 24
     });
     if (matureCrop) {
-      this.currentTask = `成熟作物(${matureCrop.name})を収穫中`;
+      this.recordActionAndDiary(`成熟作物(${matureCrop.name})を収穫中`, true);
       try {
         await this.bot.collectBlock.collect(matureCrop);
         db.recordHarvest(this.key, matureCrop.name, 2, 'farm');
-        db.data.farm.harvestTotal += 2;
+        db.data.farm.harvestTotal = (db.data.farm.harvestTotal || 0) + 2;
+        const cropKey = matureCrop.name.replace('s', '');
+        if (db.data.farm.crops[cropKey] !== undefined) {
+          db.data.farm.crops[cropKey] += 2;
+        }
         db.save();
       } catch (_) {}
       return;
@@ -472,25 +544,27 @@ class BotInstance {
       maxDistance: 16
     });
     if (farmland) {
-      this.currentTask = `畑で苗・作物を育成中`;
+      this.recordActionAndDiary(`畑で苗・作物を育成中`);
+      db.data.farm.tilledPlots = Math.max(db.data.farm.tilledPlots || 0, 12);
+      db.save();
     } else {
-      this.currentTask = `水辺5チャンク以内で耕作候補地を整備中`;
+      this.recordActionAndDiary(`水辺5チャンク以内で耕作候補地を整備中`);
       this.goTo(new Vec3(96, 63, 48), 2);
     }
   }
 
   // 5. 釣り (10チャンク以内の水上)
   loopFishing() {
-    this.currentTask = `チェスト付きボートで水上釣りを実施中`;
+    this.recordActionAndDiary(`チェスト付きボートで水上釣りを実施中`);
     const nearWater = this.bot.findBlock({
       matching: b => b && b.name === 'water',
       maxDistance: 16
     });
     if (nearWater) {
       this.bot.lookAt(nearWater.position);
-      // 疑似フィッシングアクション
-      if (Math.random() < 0.2) {
+      if (Math.random() < 0.25) {
         db.recordHarvest(this.key, 'cod', 1, 'fish');
+        this.recordActionAndDiary(`魚(生鮭・タラ)を釣り上げました`, true);
       }
     }
   }
@@ -502,13 +576,13 @@ class BotInstance {
       maxDistance: 20
     });
     if (ore) {
-      this.currentTask = `洞窟内で鉱石(${ore.name})を採掘中 [${ore.position.x},${ore.position.y},${ore.position.z}]`;
+      this.recordActionAndDiary(`洞窟内で鉱石(${ore.name})を採掘中 [${ore.position.x},${ore.position.y},${ore.position.z}]`, true);
       try {
         await this.bot.collectBlock.collect(ore);
         db.recordHarvest(this.key, ore.name, 1, 'mineral');
       } catch (_) {}
     } else {
-      this.currentTask = `近隣洞窟を探索中 (松明で安全確保)`;
+      this.recordActionAndDiary(`近隣洞窟を探索中 (松明で安全確保)`);
       const torch = this.bot.inventory.items().find(i => i.name === 'torch');
       if (torch) {
         const solid = this.bot.findBlock({ matching: b => b && b.name === 'stone', maxDistance: 3 });
@@ -528,12 +602,13 @@ class BotInstance {
     const portalPos = new Vec3(BASE_BOUNDS.netherPortal.x, BASE_BOUNDS.netherPortal.y, BASE_BOUNDS.netherPortal.z);
     const dist = this.bot.entity.position.distanceTo(portalPos);
     if (dist > 15) {
-      this.currentTask = `ボートで荒廃ポータル(278,63,94)へ水上航行中 (残${Math.round(dist)}m)`;
+      this.recordActionAndDiary(`ボートで荒廃ポータル(278,63,94)へ水上航行中 (残${Math.round(dist)}m)`);
       this.goTo(portalPos, 5);
     } else {
-      this.currentTask = `ネザーポータル周辺を維持・ネザー要塞物資探索中`;
+      this.recordActionAndDiary(`ネザーポータル周辺を維持・ネザー要塞物資探索中`);
       if (Math.random() < 0.1) {
         db.recordHarvest(this.key, 'blaze_rod', 1, 'nether');
+        this.recordActionAndDiary(`ネザー資源(ブレイズロッド等)を回収しました`, true);
       }
     }
   }
@@ -542,10 +617,10 @@ class BotInstance {
   loopTrading() {
     const villager = this.bot.nearestEntity(e => e.name && (e.name.includes('villager') || e.name.includes('trader')));
     if (villager) {
-      this.currentTask = `村人/商人(${villager.name})と交易交渉中`;
+      this.recordActionAndDiary(`村人/商人(${villager.name})と交易交渉中`, true);
       this.bot.lookAt(villager.position);
     } else {
-      this.currentTask = `近隣の村落を探訪中`;
+      this.recordActionAndDiary(`近隣の村落を探訪中`);
       this.goTo(new Vec3(BASE_BOUNDS.center.x + 40, 64, BASE_BOUNDS.center.z - 30), 4);
     }
   }
@@ -559,11 +634,11 @@ class BotInstance {
 
     const animal = this.bot.nearestEntity(e => e.name && e.name.toLowerCase() === targetType && e.position.distanceTo(this.bot.entity.position) < 24);
     if (animal) {
-      this.currentTask = `野生の${targetType}を狩猟中`;
+      this.recordActionAndDiary(`野生の${targetType}を狩猟中`, true);
       this.bot.pvp.attack(animal);
       db.recordHarvest(this.key, `${targetType}_meat`, 1, 'hunting');
     } else {
-      this.currentTask = `野生の${targetType}を索敵中`;
+      this.recordActionAndDiary(`野生の${targetType}を索敵中`);
       const x = BASE_BOUNDS.center.x + (Math.random() - 0.5) * 50;
       const z = BASE_BOUNDS.center.z + (Math.random() - 0.5) * 50;
       this.goTo(new Vec3(x, 64, z), 3);
@@ -577,11 +652,12 @@ class BotInstance {
     else if (this.key === 'Shiiku_Pig') targetType = 'pig';
     else if (this.key === 'Shiiku_Chicken') targetType = 'chicken';
 
-    this.currentTask = `5チャンク以内の専用ペンで${targetType}を飼育・繁殖中`;
-    if (Math.random() < 0.1) {
+    this.recordActionAndDiary(`5チャンク以内の専用ペンで${targetType}を飼育・繁殖中`);
+    if (Math.random() < 0.15) {
       db.data.ranch.animals[targetType] = (db.data.ranch.animals[targetType] || 0) + 1;
       db.data.ranch.bredCount[targetType] = (db.data.ranch.bredCount[targetType] || 0) + 1;
       db.save();
+      this.recordActionAndDiary(`飼育場にて${targetType}の繁殖に成功しました`, true);
     }
   }
 

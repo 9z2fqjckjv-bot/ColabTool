@@ -23,6 +23,18 @@ echo ">> [2/7] ストレージおよびキャッシュからデータ復元中..
 python3 "$REPO_DIR/scripts/backup_restore.py" restore_cache || true
 python3 "$REPO_DIR/scripts/backup_restore.py" restore || true
 
+# 旧4AIログの確実な消去 & サーバー設定の再保証 (max-players=100)
+if [ -f "$SERVER_DIR/server.properties" ]; then
+    sed -i 's/^max-players=.*/max-players=100/' "$SERVER_DIR/server.properties"
+fi
+if [ -f "$SERVER_DIR/bukkit.yml" ]; then
+    sed -i 's/connection-throttle:.*/connection-throttle: -1/' "$SERVER_DIR/bukkit.yml"
+fi
+# 旧4AI日誌の削除 (指示書v2準拠)
+rm -f /content/logs/ChatGPT_diary.md /content/logs/Claude_diary.md /content/logs/Gemini_diary.md /content/logs/Grok_diary.md /content/logs/survival_diary_combined.md
+rm -f "$SERVER_DIR/logs/ChatGPT_diary.md" "$SERVER_DIR/logs/Claude_diary.md" "$SERVER_DIR/logs/Gemini_diary.md" "$SERVER_DIR/logs/Grok_diary.md"
+
+
 # 3. LLM推論基盤の準備 (Qwen 2.5: Colab L4 24GB VRAM 最適化モデル)
 echo ">> [3/7] LLM推論エンジン (Qwen 2.5 - 14B) の準備中..."
 if ! command -v ollama >/dev/null 2>&1; then
@@ -137,8 +149,9 @@ for i in {1..15}; do
 done
 
 export SERVER_PIPE="$PIPE_PATH"
+export NODE_OPTIONS="--max-old-space-size=8192"
 nohup node index.js > /content/bots.log 2>&1 &
-echo "✅ AIPlayerクラスタ & Webポータルをバックグラウンド起動しました (ポート: 3000)"
+echo "✅ AIPlayerクラスタ (41体・メモリ8GB) & Webポータルをバックグラウンド起動しました (ポート: 3000)"
 
 # Webポータルの外部公開用トンネル (Cloudflare Tunnel - 登録不要・無料)
 if ! command -v cloudflared >/dev/null 2>&1; then

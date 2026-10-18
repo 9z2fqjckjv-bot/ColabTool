@@ -26,3 +26,5 @@ recordings/
 backup_temp/
 recorder_pids.txt
 ollama.log
+extracted_logs*/
+*.zip
