@@ -208,8 +208,10 @@ class BotManager {
         port: SERVER_PORT,
         username: r.name,
         version: '1.21.1',
-        checkTimeoutInterval: 120000,
-        viewDistance: 'tiny'
+        checkTimeoutInterval: 180000,
+        viewDistance: 'tiny',
+        physicsEnabled: true,
+        hideErrors: true
       });
 
       try {
@@ -249,12 +251,13 @@ class BotManager {
       bot.on('end', (reason) => {
         botWrapper.connected = false;
         botWrapper.cleanUp();
+        delete this.bots[key];
         db.upsertBot(key, { connected: false });
         console.warn(`[Bot - ${r.displayName}] サーバーから切断されました (${reason || 'end'})。`);
 
         // 手動デスポーンでなければ、自動再接続（即時デスポーン問題を根本解消）
         if (!botWrapper.manuallyDespawned) {
-          const reconnectDelay = 5000 + Math.floor(Math.random() * 5000);
+          const reconnectDelay = 4000 + Math.floor(Math.random() * 4000);
           console.log(`🔄 [Bot - ${r.displayName}] ${Math.round(reconnectDelay / 1000)}秒後に自動再接続を試行します...`);
           setTimeout(() => {
             if (!this.bots[key] || !this.bots[key].connected) {

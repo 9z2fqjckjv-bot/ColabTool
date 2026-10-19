@@ -14,6 +14,16 @@ echo "=================================================="
 echo "    Minecraft AI Colab Cluster - 自動起動開始 (v3)"
 echo "=================================================="
 
+# 0. Colab スワップメモリ (4GB) を確保 (RAM枯渇によるランタイム強制切断を絶対防止)
+if [ ! -f /swapfile ] && command -v swapon >/dev/null 2>&1; then
+    echo "💾 Colab スワップメモリ (4GB) を確保中..."
+    fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096 2>/dev/null || true
+    chmod 600 /swapfile 2>/dev/null || true
+    mkswap /swapfile 2>/dev/null || true
+    swapon /swapfile 2>/dev/null || true
+    echo "✅ 仮想スワップメモリ (4GB) を有効化しました (合計使用可能メモリ ~16GB)。"
+fi
+
 # 1. サーバー環境 & ツール & RadarMapプラグインセットアップ
 echo ">> [1/7] システム & プラグインセットアップ実行中..."
 bash "$REPO_DIR/scripts/setup_server.sh" || true
@@ -29,7 +39,7 @@ python3 "$REPO_DIR/scripts/backup_restore.py" restore_cache || true
 rm -f /content/logs/ChatGPT_diary.md /content/logs/Claude_diary.md /content/logs/Gemini_diary.md /content/logs/Grok_diary.md /content/logs/survival_diary_combined.md 2>/dev/null || true
 rm -f "$SERVER_DIR/logs/ChatGPT_diary.md" "$SERVER_DIR/logs/Claude_diary.md" "$SERVER_DIR/logs/Gemini_diary.md" "$SERVER_DIR/logs/Grok_diary.md" 2>/dev/null || true
 
-# サーバー設定の再保証 (max-players=50, allow-flight=true, online-mode=false, connection-throttle=-1)
+# サーバー設定の再保証 (max-players=50, allow-flight=true, online-mode=false, connection-throttle=-1, 圧縮無効)
 if [ -f "$SERVER_DIR/server.properties" ]; then
     sed -i 's/^max-players=.*/max-players=50/' "$SERVER_DIR/server.properties"
     sed -i 's/^online-mode=.*/online-mode=false/' "$SERVER_DIR/server.properties"
@@ -45,8 +55,8 @@ if [ -f "$SERVER_DIR/bukkit.yml" ]; then
     sed -i 's/connection-throttle:.*/connection-throttle: -1/' "$SERVER_DIR/bukkit.yml"
 fi
 
-# 3. LLM推論基盤の準備 (デフォルト: qwen2.5:7b - 高速起動・超安定・高日本語精度)
-MODEL_NAME="${LLM_MODEL:-qwen2.5:7b}"
+# 3. LLM推論基盤の準備 (超軽量・爆速・低負荷デフォルト: qwen2.5:3b)
+MODEL_NAME="${LLM_MODEL:-qwen2.5:3b}"
 echo ">> [3/7] LLM推論エンジン (Qwen 2.5: $MODEL_NAME) の準備中..."
 if ! command -v ollama >/dev/null 2>&1; then
     echo "Ollama をインストール中..."
@@ -63,11 +73,7 @@ sleep 3
 echo "高速・安定版モデル ($MODEL_NAME) を準備中..."
 if ! ollama list 2>/dev/null | grep -q "$MODEL_NAME"; then
     echo "$MODEL_NAME を取得中 (キャッシュがない場合の初回のみ)..."
-    ollama pull "$MODEL_NAME" > /dev/null 2>&1 || {
-        echo "⚠️ $MODEL_NAME の取得に失敗した場合、超軽量・高速版 qwen2.5:3b をフォールバック利用します..."
-        MODEL_NAME="qwen2.5:3b"
-        ollama pull "$MODEL_NAME" > /dev/null 2>&1 || true
-    }
+    ollama pull "$MODEL_NAME" > /dev/null 2>&1 || true
 fi
 
 export LLM_API_URL="http://localhost:8000/v1/chat/completions"
@@ -85,8 +91,8 @@ rm -f "$PIPE_PATH"
 mkfifo "$PIPE_PATH"
 nohup sleep 999999999 > "$PIPE_PATH" 2>/dev/null &
 
-# サーバー起動 (Colab RAM最適化: -Xms1G -Xmx2560M でOOM Killerを完全回避)
-nohup java -Xms1G -Xmx2560M -XX:+UseG1GC -jar server.jar nogui < "$PIPE_PATH" > "$SERVER_DIR/logs/latest.log" 2>&1 &
+# サーバー起動 (Colab RAM適正化: -Xms512M -Xmx1800M でOOM Killerを完全防止)
+nohup java -Xms512M -Xmx1800M -XX:+UseG1GC -jar server.jar nogui < "$PIPE_PATH" > "$SERVER_DIR/logs/latest.log" 2>&1 &
 MC_PID=$!
 echo "$MC_PID" > /content/mc_server.pid
 
@@ -160,8 +166,8 @@ for i in {1..15}; do
 done
 
 export SERVER_PIPE="$PIPE_PATH"
-export NODE_OPTIONS="--max-old-space-size=4096"
-nohup node --expose-gc index.js > /content/bots.log 2>&1 &
+export NODE_OPTIONS="--max-old-space-size=2048"
+nohup node index.js > /content/bots.log 2>&1 &
 echo "✅ AIPlayerクラスタ & 行動モニターWebポータルをバックグラウンド起動しました (ポート: 3000)"
 
 # Webポータル (ポート3000) の起動完了を確実に待機 (502 Bad Gateway 防止)

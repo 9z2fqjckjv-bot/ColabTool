@@ -26,6 +26,7 @@ file_rel_paths = [
     'plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/RadarMapPlugin.java',
     'plugins_src/RadarMap/src/main/java/com/colabtool/radarmap/RadarMapRenderer.java',
     'plugins_src/RadarMap/src/main/resources/plugin.yml',
+    'plugins_src/RadarMap/src/main/resources/config.yml',
     'nanndemoya26.key',
     'playit.toml'
 ]
@@ -85,10 +86,10 @@ nb = {
    "source": [
     "#@title 🎮 ワンクリック統合起動（PaperMC・Qwen 2.5・10体AIPlayer・Webポータル新タブ自動展開）\n",
     "#@markdown ### 🧠 AI頭脳モデル選択（起動速度と安定性の調整）\n",
-    "#@markdown - **`qwen2.5:7b` (推奨)**: 起動高速（約4.7GB）・高日本語知能・極めて安定\n",
-    "#@markdown - **`qwen2.5:3b`**: 超爆速起動（約1.9GB）・超軽量・メモリ負荷最小\n",
+    "#@markdown - **`qwen2.5:3b` (推奨・超爆速)**: 超高速起動（約1.9GB）・RAM低負荷・Colab強制切断を完全防止\n",
+    "#@markdown - **`qwen2.5:7b`**: 高知能版（約4.7GB）・表現力重視\n",
     "#@markdown - **`qwen2.5:14b`**: 最高スペック（約9GB）\n",
-    "AI_MODEL = \"qwen2.5:7b\" #@param [\"qwen2.5:7b\", \"qwen2.5:3b\", \"qwen2.5:14b\"]\n",
+    "AI_MODEL = \"qwen2.5:3b\" #@param [\"qwen2.5:3b\", \"qwen2.5:7b\", \"qwen2.5:14b\"]\n",
     "import os\n",
     "os.environ[\"LLM_MODEL\"] = AI_MODEL\n",
     "import sys\n",

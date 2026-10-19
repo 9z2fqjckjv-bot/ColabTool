@@ -1,0 +1,6 @@
+# RadarMap Configuration
+port: 3000
+update-interval: 20
+center-x: 95
+center-z: 43
+radius: 128
