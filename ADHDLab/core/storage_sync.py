@@ -258,6 +258,7 @@ class StorageSyncManager:
             "-p", str(port),
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
+            "-o", "BatchMode=yes",
             "-o", "LogLevel=ERROR",
             "-o", "ConnectTimeout=8",
             f"{user}@{host}",
@@ -288,7 +289,14 @@ class StorageSyncManager:
                     "message": f"接続拒否 (コード {res.returncode}): {res.stderr.strip()[:100]}"
                 }
         except subprocess.TimeoutExpired:
-            return {"status": "error", "message": f"接続タイムアウト ({host}:{port})"}
+            return {
+                "status": "error",
+                "message": (
+                    f"XServer接続タイムアウト ({host}:{port})\n"
+                    "【原因と対策】Google Colab（海外IP）からのSSH接続が、XServerの「国外IPアクセス制限」により遮断されている可能性が高いです。\n"
+                    "XServerサーバーパネルの「SSH設定」または「国外IPアクセス制限設定」でSSHの国外アクセス制限を【OFF（無効）】に設定してください。"
+                )
+            }
         except Exception as e:
             return {"status": "error", "message": f"接続例外: {str(e)}"}
 
@@ -315,7 +323,7 @@ class StorageSyncManager:
         port = port or DEFAULT_XSERVER_PORT
         remote_dir = remote_dir or DEFAULT_XSERVER_REMOTE_DIR
 
-        ssh_base = f"ssh -i {key_file} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=10"
+        ssh_base = f"ssh -i {key_file} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
 
         try:
             # 1. リモートディレクトリの準備 (~/adhdlab_backup/data, ~/adhdlab_backup/archives)
@@ -333,7 +341,7 @@ class StorageSyncManager:
             if os.path.exists(self.local_data_dir):
                 rsync_cmd = [
                     "rsync", "-avz", "--delete",
-                    "-e", f"ssh -i {key_file} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
+                    "-e", f"ssh -i {key_file} -p {port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o LogLevel=ERROR",
                     self.local_data_dir + "/",
                     f"{user}@{host}:{remote_dir}/data/"
                 ]
@@ -344,7 +352,7 @@ class StorageSyncManager:
                     # scp フォールバック
                     scp_cmd = [
                         "scp", "-P", str(port), "-i", key_file, "-r",
-                        "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                        "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
                         self.local_data_dir,
                         f"{user}@{host}:{remote_dir}/"
                     ]
@@ -378,13 +386,13 @@ class StorageSyncManager:
             # XServer へ最新アーカイブ (adhdlab_latest.tar.gz) および世代アーカイブを転送
             scp_tar_latest = [
                 "scp", "-P", str(port), "-i", key_file,
-                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
                 temp_tar_path,
                 f"{user}@{host}:{remote_dir}/adhdlab_latest.tar.gz"
             ]
             scp_tar_archive = [
                 "scp", "-P", str(port), "-i", key_file,
-                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+                "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
                 temp_tar_path,
                 f"{user}@{host}:{remote_dir}/archives/{temp_tar_name}"
             ]
@@ -404,7 +412,14 @@ class StorageSyncManager:
             }
 
         except subprocess.TimeoutExpired:
-            return {"status": "error", "message": f"XServer同期タイムアウト ({host}:{port})"}
+            return {
+                "status": "error",
+                "message": (
+                    f"XServer同期タイムアウト ({host}:{port})\n"
+                    "【原因と対策】Google Colab（海外IP）からのSSH通信が、XServerの「国外IPアクセス制限」により遮断されている可能性が高いです。\n"
+                    "XServerサーバーパネルの「SSH設定」または「国外IPアクセス制限設定」でSSHの国外アクセス制限を【OFF（無効）】に設定してください。"
+                )
+            }
         except Exception as e:
             return {"status": "error", "message": f"XServer同期例外: {str(e)}"}
 
@@ -428,7 +443,7 @@ class StorageSyncManager:
         temp_tar_path = "/tmp/adhdlab_restore_xserver.tar.gz"
         scp_cmd = [
             "scp", "-P", str(port), "-i", key_file,
-            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "LogLevel=ERROR",
+            "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "BatchMode=yes", "-o", "LogLevel=ERROR",
             f"{user}@{host}:{remote_dir}/adhdlab_latest.tar.gz",
             temp_tar_path
         ]
