@@ -85,7 +85,8 @@ def enforce_server_config():
                 "max-players": "50",
                 "enforce-secure-profile": "false",
                 "online-mode": "false",
-                "allow-flight": "true"
+                "allow-flight": "true",
+                "network-compression-threshold": "-1"
             }
             new_lines = []
             found_keys = set()
@@ -103,7 +104,7 @@ def enforce_server_config():
                 if k not in found_keys:
                     new_lines.append(f"{k}={v}")
             sp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            log("🛡️ server.properties の allow-flight=true, online-mode=false, max-players=50 を確認・維持しました。")
+            log("🛡️ server.properties の allow-flight=true, online-mode=false, max-players=50, network-compression-threshold=-1 を確認・維持しました。")
         except Exception as e:
             log(f"⚠️ server.properties 更新警告: {e}")
 

@@ -34,6 +34,7 @@ if [ -f "$SERVER_DIR/server.properties" ]; then
     sed -i 's/^max-players=.*/max-players=50/' "$SERVER_DIR/server.properties"
     sed -i 's/^online-mode=.*/online-mode=false/' "$SERVER_DIR/server.properties"
     sed -i 's/^allow-flight=.*/allow-flight=true/' "$SERVER_DIR/server.properties"
+    sed -i 's/^network-compression-threshold=.*/network-compression-threshold=-1/' "$SERVER_DIR/server.properties"
     if grep -q "^enforce-secure-profile=" "$SERVER_DIR/server.properties"; then
         sed -i 's/^enforce-secure-profile=.*/enforce-secure-profile=false/' "$SERVER_DIR/server.properties"
     else
@@ -160,9 +161,21 @@ for i in {1..15}; do
 done
 
 export SERVER_PIPE="$PIPE_PATH"
-export NODE_OPTIONS="--max-old-space-size=2560 --expose-gc"
-nohup node --max-old-space-size=2560 --expose-gc index.js > /content/bots.log 2>&1 &
+export NODE_OPTIONS="--max-old-space-size=4096 --expose-gc"
+nohup node --max-old-space-size=4096 --expose-gc index.js > /content/bots.log 2>&1 &
 echo "✅ AIPlayerクラスタ & 行動モニターWebポータルをバックグラウンド起動しました (ポート: 3000)"
+
+# Webポータル (ポート3000) の起動完了を確実に待機 (502 Bad Gateway 防止)
+echo "Webポータル (ポート: 3000) のリッスン開始を待機中..."
+for i in {1..20}; do
+    if nc -z 127.0.0.1 3000 2>/dev/null; then
+        echo "✅ ポート 3000 が正常にリッスンされました！"
+        break
+    fi
+    sleep 1
+    echo -n "."
+done
+echo ""
 
 # Webポータルの外部公開用トンネル (Cloudflare Tunnel)
 if ! command -v cloudflared >/dev/null 2>&1; then
@@ -179,7 +192,7 @@ fi
 
 echo "WebポータルのCloudflare公開トンネルURL確立を待機中..."
 PORTAL_URL=""
-for i in {1..16}; do
+for i in {1..20}; do
     PORTAL_URL=$(grep -oE "https://[a-zA-Z0-9-]+\.trycloudflare\.com" /content/portal_tunnel.log 2>/dev/null | tail -n 1 || true)
     if [ -n "$PORTAL_URL" ]; then
         echo "$PORTAL_URL" > /content/portal_url.txt
