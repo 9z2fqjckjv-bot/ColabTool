@@ -45,8 +45,9 @@ if [ -f "$SERVER_DIR/bukkit.yml" ]; then
     sed -i 's/connection-throttle:.*/connection-throttle: -1/' "$SERVER_DIR/bukkit.yml"
 fi
 
-# 3. LLM推論基盤の準備 (Qwen 2.5: Colab L4 24GB VRAM 最適化モデル)
-echo ">> [3/7] LLM推論エンジン (Qwen 2.5 - 14B) の準備中..."
+# 3. LLM推論基盤の準備 (デフォルト: qwen2.5:7b - 高速起動・超安定・高日本語精度)
+MODEL_NAME="${LLM_MODEL:-qwen2.5:7b}"
+echo ">> [3/7] LLM推論エンジン (Qwen 2.5: $MODEL_NAME) の準備中..."
 if ! command -v ollama >/dev/null 2>&1; then
     echo "Ollama をインストール中..."
     curl -fsSL https://ollama.com/install.sh | sh || true
@@ -59,14 +60,12 @@ sleep 1
 OLLAMA_NUM_PARALLEL=1 OLLAMA_MAX_LOADED_MODELS=1 OLLAMA_HOST=0.0.0.0:8000 nohup ollama serve > /content/ollama.log 2>&1 &
 sleep 3
 
-# Colab L4 GPU上で機能する最高スペック: qwen2.5:14b (VRAM ~9GB使用、高速高精度)
-MODEL_NAME="qwen2.5:14b"
-echo "日本語対応・高スペックモデル ($MODEL_NAME) を準備中..."
-if ! ollama list 2>/dev/null | grep -q "qwen2.5:14b"; then
-    echo "Qwen 2.5 14B を取得中 (キャッシュがない場合の初回のみ)..."
+echo "高速・安定版モデル ($MODEL_NAME) を準備中..."
+if ! ollama list 2>/dev/null | grep -q "$MODEL_NAME"; then
+    echo "$MODEL_NAME を取得中 (キャッシュがない場合の初回のみ)..."
     ollama pull "$MODEL_NAME" > /dev/null 2>&1 || {
-        echo "⚠️ 14Bモデルの取得に失敗した場合、高速安定版 7B をフォールバック利用します..."
-        MODEL_NAME="qwen2.5:7b"
+        echo "⚠️ $MODEL_NAME の取得に失敗した場合、超軽量・高速版 qwen2.5:3b をフォールバック利用します..."
+        MODEL_NAME="qwen2.5:3b"
         ollama pull "$MODEL_NAME" > /dev/null 2>&1 || true
     }
 fi

@@ -10,7 +10,7 @@ const db = require('./database');
 class AIBrain {
   constructor(options = {}) {
     this.apiUrl = process.env.LLM_API_URL || 'http://localhost:8000/v1/chat/completions';
-    this.modelName = process.env.LLM_MODEL || 'qwen2.5:14b';
+    this.modelName = process.env.LLM_MODEL || 'qwen2.5:7b';
     this.chatHistory = [];
     this.maxHistory = 30;
     this.knowledgeBase = knowledgeBase;
