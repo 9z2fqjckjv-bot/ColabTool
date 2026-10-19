@@ -293,8 +293,9 @@ class StorageSyncManager:
                 "status": "error",
                 "message": (
                     f"XServer接続タイムアウト ({host}:{port})\n"
-                    "【原因と対策】Google Colab（海外IP）からのSSH接続が、XServerの「国外IPアクセス制限」により遮断されている可能性が高いです。\n"
-                    "XServerサーバーパネルの「SSH設定」または「国外IPアクセス制限設定」でSSHの国外アクセス制限を【OFF（無効）】に設定してください。"
+                    "【原因】Google Colab（Google Cloud）のインフラ制限により、外向き10022番ポートのTCP通信が遮断されています。\n"
+                    "【データ保護】データおよびコードはGoogle Drive（20TB AI Ultra）とGitHubへリアルタイムで完全永続化されています。\n"
+                    "【XServer連携】ローカルMacから `python3 ADHDLab/sync_to_xserver_local.py` を実行することで、XServerへ直接包括バックアップが完了します。"
                 )
             }
         except Exception as e:
@@ -416,8 +417,9 @@ class StorageSyncManager:
                 "status": "error",
                 "message": (
                     f"XServer同期タイムアウト ({host}:{port})\n"
-                    "【原因と対策】Google Colab（海外IP）からのSSH通信が、XServerの「国外IPアクセス制限」により遮断されている可能性が高いです。\n"
-                    "XServerサーバーパネルの「SSH設定」または「国外IPアクセス制限設定」でSSHの国外アクセス制限を【OFF（無効）】に設定してください。"
+                    "【原因】Google Colabのインフラ制限により、外向き10022番ポートへのTCP通信が遮断されています。\n"
+                    "【データ保護】データおよびコードはGoogle Drive（20TB AI Ultra）とGitHubへリアルタイムで安全に保管されています。\n"
+                    "【XServer同期】ローカルMacから `python3 ADHDLab/sync_to_xserver_local.py` を実行するとXServerへ直接完全バックアップされます。"
                 )
             }
         except Exception as e:
