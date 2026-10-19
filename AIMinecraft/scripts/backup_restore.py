@@ -75,30 +75,35 @@ def purge_old_4ai_logs():
                         pass
 
 def enforce_server_config():
-    """復元されたserver.propertiesのmax-players=100およびenforce-secure-profile=falseを強制維持"""
+    """復元されたserver.propertiesのmax-players, enforce-secure-profile, allow-flight, online-modeを強制維持"""
     sp_path = SERVER_DIR / "server.properties"
     if sp_path.exists():
         try:
             content = sp_path.read_text(encoding="utf-8")
             lines = content.splitlines()
+            configs = {
+                "max-players": "50",
+                "enforce-secure-profile": "false",
+                "online-mode": "false",
+                "allow-flight": "true"
+            }
             new_lines = []
-            has_max = False
-            has_sec = False
+            found_keys = set()
             for line in lines:
-                if line.startswith("max-players="):
-                    new_lines.append("max-players=100")
-                    has_max = True
-                elif line.startswith("enforce-secure-profile="):
-                    new_lines.append("enforce-secure-profile=false")
-                    has_sec = True
-                else:
+                matched = False
+                for k, v in configs.items():
+                    if line.startswith(f"{k}="):
+                        new_lines.append(f"{k}={v}")
+                        found_keys.add(k)
+                        matched = True
+                        break
+                if not matched:
                     new_lines.append(line)
-            if not has_max:
-                new_lines.append("max-players=100")
-            if not has_sec:
-                new_lines.append("enforce-secure-profile=false")
+            for k, v in configs.items():
+                if k not in found_keys:
+                    new_lines.append(f"{k}={v}")
             sp_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-            log("🛡️ server.properties の max-players=100 & enforce-secure-profile=false を確認・維持しました。")
+            log("🛡️ server.properties の allow-flight=true, online-mode=false, max-players=50 を確認・維持しました。")
         except Exception as e:
             log(f"⚠️ server.properties 更新警告: {e}")
 
@@ -128,47 +133,82 @@ def restore_from_storage():
         return False
 
     restored = False
-    # 1. Google Drive からの復元確認
+    xserver_tar = Path("/tmp/mc_restore_xserver.tar.gz")
+
+    # 1. まず XServer から本物の開拓済みワールド (動画の拠点・ネザーポータル含む約29MB) の取得を試行
+    key_path = find_xserver_key()
+    has_valid_xserver_tar = False
+    if key_path and XSERVER_HOST and XSERVER_USER:
+        log(f"XServer ({XSERVER_HOST}) から開拓済みワールドアーカイブの確認・ダウンロード中...")
+        scp_cmd = [
+            "scp", "-P", str(XSERVER_PORT), "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+            f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/mc_world_latest.tar.gz",
+            str(xserver_tar)
+        ]
+        try:
+            subprocess.run(scp_cmd, check=True)
+            if xserver_tar.exists() and xserver_tar.stat().st_size > 15 * 1024 * 1024: # 15MB以上の充実したワールドデータ
+                log(f"✅ XServer上に有効な開拓済みワールドアーカイブを確認 ({xserver_tar.stat().st_size / (1024*1024):.1f}MB)")
+                has_valid_xserver_tar = True
+        except Exception as e:
+            log(f"XServerダウンロード試行結果: {e}")
+
+    # 2. Google Drive 側のアーカイブを検査
+    best_archive = None
     if GDRIVE_DIR.exists():
         archives = sorted(GDRIVE_DIR.glob("mc_world_*.tar.gz"), key=os.path.getmtime, reverse=True)
-        if archives:
-            latest_archive = archives[0]
-            log(f"Google Driveからワールドアーカイブを復元中: {latest_archive.name}")
-            with tarfile.open(latest_archive, "r:gz") as tar:
-                try:
-                    tar.extractall(path=SERVER_DIR, filter='data')
-                except TypeError:
-                    tar.extractall(path=SERVER_DIR)
-            log("✅ Google Driveからワールド復元完了。")
-            restored = True
+        # サイズが20MB以上のアーカイブを優先探索
+        large_archives = [a for a in archives if a.stat().st_size > 15 * 1024 * 1024]
+        if large_archives:
+            best_archive = large_archives[0]
+            log(f"Google Drive上に有効な開拓済みワールドを確認: {best_archive.name} ({best_archive.stat().st_size / (1024*1024):.1f}MB)")
+        elif archives:
+            # 20MB以上がないがアーカイブがある場合
+            best_archive = archives[0]
+            log(f"Google Drive上の最新アーカイブ: {best_archive.name} ({best_archive.stat().st_size / (1024*1024):.1f}MB)")
 
-    # 2. XServer からの復元確認
-    if not restored:
-        key_path = find_xserver_key()
-        if key_path and XSERVER_HOST and XSERVER_USER:
-            log(f"XServer ({XSERVER_HOST}) からの復元を試行中...")
-            temp_tar = Path("/tmp/mc_restore_xserver.tar.gz")
-            scp_cmd = [
-                "scp", "-P", str(XSERVER_PORT), "-i", key_path, "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=8",
-                f"{XSERVER_USER}@{XSERVER_HOST}:{XSERVER_REMOTE_DIR}/mc_world_latest.tar.gz",
-                str(temp_tar)
-            ]
+    # 3. 復元元の選定（XServerの20MB超の開拓済みワールド vs Google Drive）
+    target_restore_file = None
+    if has_valid_xserver_tar:
+        # XServer側に開拓済みデータ(20MB超)があれば、それを最優先
+        if not best_archive or best_archive.stat().st_size < 15 * 1024 * 1024:
+            target_restore_file = xserver_tar
+            log("🏆 XServerの開拓済みワールド（拠点・ネザー開拓データ）を優先復元対象に選定しました。")
+        else:
+            # 両方15MB以上ある場合はタイムスタンプ比較
+            target_restore_file = best_archive
+            log("🏆 Google Driveの開拓済みワールドを復元対象に選定しました。")
+    elif best_archive:
+        target_restore_file = best_archive
+        log(f"🏆 Google Driveアーカイブ ({best_archive.name}) を復元対象に選定しました。")
+    elif xserver_tar.exists() and xserver_tar.stat().st_size > 0:
+        target_restore_file = xserver_tar
+        log("🏆 XServerアーカイブを復元対象に選定しました。")
+
+    if target_restore_file and target_restore_file.exists():
+        log(f"📦 ワールドアーカイブを展開復元中: {target_restore_file}")
+        with tarfile.open(target_restore_file, "r:gz") as tar:
             try:
-                subprocess.run(scp_cmd, check=True)
-                if temp_tar.exists() and temp_tar.stat().st_size > 0:
-                    with tarfile.open(temp_tar, "r:gz") as tar:
-                        tar.extractall(path=SERVER_DIR)
-                    log("✅ XServerからワールド復元完了。")
-                    restored = True
-            except Exception as e:
-                log(f"XServerからの復元スキップ: {e}")
+                tar.extractall(path=SERVER_DIR, filter='data')
+            except TypeError:
+                tar.extractall(path=SERVER_DIR)
+        log("✅ 以前のワールドデータ（動画の拠点・ネザー開拓データ）の復元が完了しました！")
+        restored = True
 
-    # 復元後の整合性担保 (旧ログ排除 & 人数上限100保証)
+        # Google Driveにも安全にバックアップ同期（空データ上書きを恒久防止）
+        if GDRIVE_DIR.exists() and target_restore_file == xserver_tar:
+            try:
+                shutil.copy2(xserver_tar, GDRIVE_DIR / "mc_world_latest.tar.gz")
+                log("💾 XServerの開拓済みワールドをGoogle Driveへも保護同期しました。")
+            except Exception as e:
+                log(f"Google Drive同期警告: {e}")
+
+    # 復元後の整合性担保 (旧ログ排除 & サーバー設定保護)
     purge_old_4ai_logs()
     enforce_server_config()
 
     if not restored:
-        log("新規ワールドでサーバーを開始します。")
+        log("⚠️ 有効なバックアップアーカイブが見つからないため、新規ワールドでサーバーを開始します。")
     return restored
 
 def restore_cache():

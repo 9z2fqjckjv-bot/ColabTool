@@ -1,7 +1,8 @@
 /**
- * database.js - Minecraft AI Cluster Deep System Database
+ * database.js - Minecraft AI Cluster Deep System Database (改善指示書v3準拠)
  * システム深部まで深掘りできるデータベースエンジン
- * ボット情報、インベントリ、拠点チェスト、畑・飼育場、収集実績、日誌、司令塔レポートを管理
+ * ボット情報、2グループ管理、インベントリ、アイテム要求、拠点チェスト、畑・飼育場、
+ * 収集実績、日誌、司令等達成レポート、統括日報を管理
  */
 
 const fs = require('fs');
@@ -14,10 +15,15 @@ class SystemDatabase {
     this.data = {
       meta: {
         created: new Date().toISOString(),
-        version: "2.0.0",
+        version: "3.0.0",
         worldSessionId: Date.now().toString(36)
       },
       bots: {},
+      groupSettings: {
+        group1Active: true,
+        group2Active: true
+      },
+      itemRequests: {}, // { [botId]: [ { id, itemName, count, reason, requestedAt, fulfilled } ] }
       chests: {},
       farm: {
         tilledPlots: 0,
@@ -32,10 +38,11 @@ class SystemDatabase {
         lastUpdated: new Date().toISOString()
       },
       harvestLogs: [],
-      commanderReports: {},
+      commanderReports: {}, // グループリーダーによる統括レポート
+      userTaskReports: [], // ユーザー指示に対する達成状況レポート
       improvementProposals: [],
       eventLogs: [],
-      executiveReports: []
+      executiveReports: [] // 統括日報 (YouTubeスライド用)
     };
 
     this.maxEvents = 1000;
@@ -98,13 +105,58 @@ class SystemDatabase {
     return this.data.bots[id] || null;
   }
 
+  // --- アイテム要求管理 ---
+  recordItemRequest(botId, itemName, count = 1, reason = '作業続行のため') {
+    if (!this.data.itemRequests[botId]) {
+      this.data.itemRequests[botId] = [];
+    }
+    const req = {
+      id: Date.now().toString(36) + Math.random().toString(36).substring(2, 4),
+      botId,
+      itemName,
+      count,
+      reason,
+      requestedAt: new Date().toISOString(),
+      fulfilled: false
+    };
+    // 重複を避けて最新に更新
+    const idx = this.data.itemRequests[botId].findIndex(r => r.itemName === itemName && !r.fulfilled);
+    if (idx >= 0) {
+      this.data.itemRequests[botId][idx] = req;
+    } else {
+      this.data.itemRequests[botId].unshift(req);
+    }
+    // 上限保持
+    if (this.data.itemRequests[botId].length > 10) {
+      this.data.itemRequests[botId].pop();
+    }
+    this.save();
+    return req;
+  }
+
+  fulfillItemRequest(botId, itemName) {
+    if (this.data.itemRequests[botId]) {
+      for (const req of this.data.itemRequests[botId]) {
+        if (req.itemName === itemName && !req.fulfilled) {
+          req.fulfilled = true;
+          req.fulfilledAt = new Date().toISOString();
+        }
+      }
+      this.save();
+    }
+  }
+
+  getAllItemRequests() {
+    return this.data.itemRequests;
+  }
+
   // --- イベントログ ---
   logEvent(category, botId, message, details = {}) {
     const entry = {
       id: Date.now() + Math.random().toString(36).substring(2, 6),
       time: new Date().toISOString(),
       timestamp: Date.now(),
-      category, // 'chat', 'combat', 'harvest', 'store', 'move', 'system', 'commander'
+      category, // 'chat', 'combat', 'harvest', 'store', 'move', 'system', 'commander', 'demand', 'pair'
       botId,
       message,
       details
@@ -166,7 +218,7 @@ class SystemDatabase {
     this.save();
   }
 
-  // --- 司令塔レポート ---
+  // --- 司令塔 / グループリーダーレポート ---
   updateCommanderReport(roleKey, report) {
     this.data.commanderReports[roleKey] = {
       ...report,
@@ -174,6 +226,21 @@ class SystemDatabase {
       updatedAt: new Date().toISOString()
     };
     this.save();
+  }
+
+  // --- ユーザー指示達成レポート ---
+  addUserTaskReport(report) {
+    const entry = {
+      id: Date.now().toString(36),
+      timestamp: new Date().toISOString(),
+      ...report
+    };
+    this.data.userTaskReports.unshift(entry);
+    if (this.data.userTaskReports.length > 50) {
+      this.data.userTaskReports.pop();
+    }
+    this.save();
+    return entry;
   }
 
   // --- 改善提案 ---
@@ -205,6 +272,10 @@ class SystemDatabase {
     else if (table === 'events') source = this.data.eventLogs;
     else if (table === 'chests') source = Object.values(this.data.chests);
     else if (table === 'commander_reports') source = Object.values(this.data.commanderReports);
+    else if (table === 'user_task_reports') source = this.data.userTaskReports;
+    else if (table === 'item_requests') {
+      source = Object.entries(this.data.itemRequests).flatMap(([botId, reqs]) => reqs);
+    }
     else if (table === 'improvement_proposals') source = this.data.improvementProposals;
     else if (table === 'executive_reports') source = this.data.executiveReports;
     else if (table === 'farm') source = [this.data.farm];
@@ -231,17 +302,30 @@ class SystemDatabase {
   getOverviewStats() {
     const totalHarvest = this.data.harvestLogs.reduce((acc, cur) => acc + (cur.count || 1), 0);
     const totalChests = Object.keys(this.data.chests).length;
-    const activeBots = Object.values(this.data.bots).filter(b => b.connected).length;
+    const allBots = Object.values(this.data.bots);
+    const activeBots = allBots.filter(b => b.connected).length;
+    const group1Active = allBots.filter(b => b.group === 1 && b.connected).length;
+    const group2Active = allBots.filter(b => b.group === 2 && b.connected).length;
+
+    let pendingRequestsCount = 0;
+    for (const reqs of Object.values(this.data.itemRequests)) {
+      pendingRequestsCount += reqs.filter(r => !r.fulfilled).length;
+    }
+
     return {
       activeBots,
-      totalBots: Object.keys(this.data.bots).length,
+      totalBots: allBots.length,
+      group1Active,
+      group2Active,
+      pendingRequestsCount,
       totalHarvest,
       totalChests,
       farmPlots: this.data.farm.tilledPlots,
       ranchTotal: Object.values(this.data.ranch.animals).reduce((a, b) => a + b, 0),
       totalEvents: this.data.eventLogs.length,
       proposalsCount: this.data.improvementProposals.length,
-      reportsCount: this.data.executiveReports.length
+      reportsCount: this.data.executiveReports.length,
+      taskReportsCount: this.data.userTaskReports.length
     };
   }
 }

@@ -1,6 +1,8 @@
 /**
  * portal_server.js - Minecraft AI Cluster 総合行動モニター & Webポータル
- * Express + WebSocket サーバー (ポート 3000)
+ * Express + WebSocket サーバー (ポート 3000) - 改善指示書v3準拠
+ * グループ管理 (スポーン/デスポーン), 要求アイテム一覧, リアルタイムチャット/コマンド,
+ * 行動日誌, 統括日報 (YouTubeスライド), 深部DB
  */
 
 const express = require('express');
@@ -54,6 +56,69 @@ class PortalServer {
       res.json({ success: true, bots });
     });
 
+    // グループ管理: スポーン
+    this.app.post('/api/groups/spawn', (req, res) => {
+      const { group } = req.body;
+      if (!this.botManager) return res.status(503).json({ success: false, message: 'BotManager未接続' });
+
+      if (group === 'all') {
+        this.botManager.spawnAllBots();
+        res.json({ success: true, message: '全10名のAIPlayerを順次スポーン開始しました' });
+      } else {
+        const gId = parseInt(group, 10);
+        this.botManager.spawnGroup(gId);
+        res.json({ success: true, message: `第${gId}グループのAIPlayerをスポーン開始しました` });
+      }
+    });
+
+    // グループ管理: デスポーン
+    this.app.post('/api/groups/despawn', (req, res) => {
+      const { group } = req.body;
+      if (!this.botManager) return res.status(503).json({ success: false, message: 'BotManager未接続' });
+
+      if (group === 'all') {
+        this.botManager.despawnAllBots();
+        res.json({ success: true, message: '全AIPlayerをデスポーンしました' });
+      } else {
+        const gId = parseInt(group, 10);
+        this.botManager.despawnGroup(gId);
+        res.json({ success: true, message: `第${gId}グループのAIPlayerをデスポーンしました` });
+      }
+    });
+
+    // 個別ボット: スポーン
+    this.app.post('/api/bots/:id/spawn', (req, res) => {
+      const { id } = req.params;
+      if (!this.botManager) return res.status(503).json({ success: false, message: 'BotManager未接続' });
+      this.botManager.spawnSingleBot(id);
+      res.json({ success: true, message: `${id} をスポーンしました` });
+    });
+
+    // 個別ボット: デスポーン
+    this.app.post('/api/bots/:id/despawn', (req, res) => {
+      const { id } = req.params;
+      if (!this.botManager) return res.status(503).json({ success: false, message: 'BotManager未接続' });
+      const ok = this.botManager.despawnBot(id);
+      res.json({ success: ok, message: ok ? `${id} をデスポーンしました` : `${id} は起動していません` });
+    });
+
+    // アイテム要求リスト
+    this.app.get('/api/item-requests', (req, res) => {
+      res.json({ success: true, requests: db.getAllItemRequests() });
+    });
+
+    // アイテム要求充足マーク
+    this.app.post('/api/item-requests/fulfill', (req, res) => {
+      const { botId, itemName } = req.body;
+      db.fulfillItemRequest(botId, itemName);
+      res.json({ success: true });
+    });
+
+    // ユーザー指示達成レポート
+    this.app.get('/api/task-reports', (req, res) => {
+      res.json({ success: true, reports: db.data.userTaskReports });
+    });
+
     // 拠点チェスト
     this.app.get('/api/chests', (req, res) => {
       const chests = db.getChests();
@@ -100,11 +165,6 @@ class PortalServer {
       res.json({ success: true, logs: logs.slice(0, limit) });
     });
 
-    // 司令塔レポート
-    this.app.get('/api/command-reports', (req, res) => {
-      res.json({ success: true, reports: db.data.commanderReports });
-    });
-
     // 改善提案
     this.app.get('/api/proposals', (req, res) => {
       res.json({ success: true, proposals: db.data.improvementProposals });
@@ -137,7 +197,7 @@ class PortalServer {
     this.app.post('/api/reports/generate', async (req, res) => {
       if (!this.brain) return res.status(503).json({ success: false, message: 'LLMエンジン未初期化' });
       const sessionInfo = this.botManager ? this.botManager.getServerStatus() : { uptime: '1時間', tps: 20.0 };
-      const report = await this.brain.generateExecutiveReport(sessionInfo, db.data.commanderReports, db.getOverviewStats());
+      const report = await this.brain.generateExecutiveReport(sessionInfo, db.getOverviewStats());
       this.broadcast('new_report', report);
       res.json({ success: true, report });
     });
@@ -185,12 +245,12 @@ class PortalServer {
   setupWebSockets() {
     this.wss.on('connection', (ws) => {
       this.clients.add(ws);
-      // 初回接続時に初期データを送信
       ws.send(JSON.stringify({
         type: 'init',
         stats: db.getOverviewStats(),
         bots: db.getBots(),
-        reports: db.data.commanderReports
+        itemRequests: db.getAllItemRequests(),
+        taskReports: db.data.userTaskReports
       }));
 
       ws.on('close', () => {

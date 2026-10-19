@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # shutdown.sh - 安全な停止・二重バックアップ(Drive/XServer)・日誌Gitプッシュ
-# (改善指示書v2準拠: 41AIPlayer・深部DB・統括日報の完全保存)
+# (改善指示書v3準拠: 10名AIPlayer・深部DB・統括日報の完全保存)
 # ==============================================================================
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,7 +9,7 @@ SERVER_DIR="/content/minecraft_server"
 PIPE_PATH="$SERVER_DIR/server.pipe"
 
 echo "=================================================="
-echo "    Minecraft AI Colab Server - 安全なシャットダウン"
+echo "    Minecraft AI Colab Server - 安全なシャットダウン (v3)"
 echo "=================================================="
 
 # 0. 定期バックアッププロセスの終了
@@ -17,7 +17,7 @@ pkill -f "backup_restore.py" || true
 pkill -f "sleep 999999999" || true
 
 # 1. AIPlayer クラスタの安全停止
-echo ">> [1/5] 全41体のAIPlayerを安全にログアウト中..."
+echo ">> [1/5] 全10名のAIPlayerを安全にログアウト中..."
 pkill -f "node index.js" || true
 
 # 2. Minecraft サーバーへの save-all & stop
