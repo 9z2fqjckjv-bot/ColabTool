@@ -56,14 +56,20 @@ def _resolve_github_token() -> str:
     return ""
 
 def _resolve_ssh_key_path() -> Optional[str]:
-    """nanndemoya26.key の配置パスを優先順位に従って探索し、パーミッションを設定"""
+    """nanndemoya26.key の配置パスを探索し、ローカルに安全に配置＆chmod 0600を設定"""
     env_key = os.environ.get("XSERVER_KEY_PATH")
     candidates = []
     if env_key:
         candidates.append(os.path.abspath(env_key))
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    project_adhd_dir = os.path.abspath(os.path.join(base_dir, ".."))
+
     candidates.extend([
+        # Google Drive 上の永続化キー（最優先で探してローカル同期）
+        os.path.join(DEFAULT_DRIVE_PATH, "nanndemoya26.key"),
+        "/content/drive/MyDrive/nanndemoya26.key",
+        "/content/drive/MyDrive/ADHDLab/nanndemoya26.key",
         # ADHDLab 直下
         os.path.abspath(os.path.join(base_dir, "../nanndemoya26.key")),
         # カレントディレクトリ
@@ -77,18 +83,36 @@ def _resolve_ssh_key_path() -> Optional[str]:
         "/content/ColabTool/nanndemoya26.key",
         "/content/ColabTool/AIMinecraft/nanndemoya26.key",
         "/content/nanndemoya26.key",
-        # Google Drive 上の永続化キー
-        os.path.join(DEFAULT_DRIVE_PATH, "nanndemoya26.key")
     ])
+
+    local_secure_key = os.path.join(project_adhd_dir, "nanndemoya26.key")
+    backup_secure_key = os.path.expanduser("~/.ssh/nanndemoya26.key")
 
     for p in candidates:
         if os.path.exists(p) and os.path.isfile(p):
-            try:
-                # SSH秘密鍵は0600必須
-                os.chmod(p, 0o600)
-            except Exception:
-                pass
-            return p
+            # Google Drive (FUSE) 上のファイルは chmod 0600 が効かない場合があるため、
+            # Linuxローカルファイルシステム側にコピーしてパーミッションを厳格に 0600 に設定する
+            target_key_path = p
+            if p.startswith("/content/drive") or not os.access(p, os.W_OK):
+                try:
+                    os.makedirs(os.path.dirname(backup_secure_key), exist_ok=True)
+                    shutil.copy2(p, backup_secure_key)
+                    os.chmod(backup_secure_key, 0o600)
+                    target_key_path = backup_secure_key
+                except Exception:
+                    try:
+                        shutil.copy2(p, local_secure_key)
+                        os.chmod(local_secure_key, 0o600)
+                        target_key_path = local_secure_key
+                    except Exception:
+                        pass
+            else:
+                try:
+                    os.chmod(p, 0o600)
+                except Exception:
+                    pass
+
+            return target_key_path
     return None
 
 
