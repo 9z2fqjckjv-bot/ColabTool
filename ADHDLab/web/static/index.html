@@ -1130,6 +1130,22 @@
       }
     }
 
+    async function safeFetchJson(url, options = {}) {
+      const res = await fetch(url, options);
+      const contentType = res.headers.get('content-type') || '';
+      if (!res.ok) {
+        if (!contentType.includes('application/json')) {
+          throw new Error(`HTTP ${res.status}: バックエンドサーバーからHTMLエラーが返されました。Colabで「ステップ 4」セルを再実行（サーバー再起動）してください。`);
+        }
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.detail || errData.message || `HTTP ${res.status} エラーが発生しました。`);
+      }
+      if (!contentType.includes('application/json')) {
+        throw new Error(`サーバーの応答形式が無効です（HTMLが返却されました）。Colab側で「ステップ 4」を再実行して最新コードでサーバーを再起動してください。`);
+      }
+      return await res.json();
+    }
+
     // XServer モーダル開閉
     async function openXServerModal() {
       document.getElementById('xserverModal').classList.add('active');
@@ -1141,15 +1157,14 @@
     }
 
     async function loadXServerInfo() {
+      const badge = document.getElementById('xserverKeyBadge');
       try {
-        const res = await fetch('/api/xserver/info');
-        const data = await res.json();
+        const data = await safeFetchJson('/api/xserver/info');
         document.getElementById('xsHost').innerText = data.host;
         document.getElementById('xsUser').innerText = data.user;
         document.getElementById('xsPort').innerText = data.port;
         document.getElementById('xsRemoteDir').innerText = data.remote_dir;
 
-        const badge = document.getElementById('xserverKeyBadge');
         if (data.key_detected) {
           badge.innerText = '🟢 nanndemoya26.key 検出済み';
           badge.style.background = '#dcfce7';
@@ -1161,6 +1176,11 @@
         }
       } catch (e) {
         console.error('XServer情報取得エラー:', e);
+        if (badge) {
+          badge.innerText = '⚠️ 接続未確立';
+          badge.style.background = '#fef3c7';
+          badge.style.color = '#b45309';
+        }
       }
     }
 
@@ -1169,8 +1189,7 @@
       const consoleBox = document.getElementById('xserverConsole');
       consoleBox.innerText = '🔄 XServer (nanndemoya26.xsrv.jp:10022) へのSSH接続疎通テストを実行中...';
       try {
-        const res = await fetch('/api/xserver/test', { method: 'POST' });
-        const data = await res.json();
+        const data = await safeFetchJson('/api/xserver/test', { method: 'POST' });
         if (data.status === 'success') {
           consoleBox.innerText = `✅ [接続成功]\n- メッセージ: ${data.message}\n- ホスト: ${data.host}:${data.port}\n- ユーザー: ${data.user}\n- サーバー情報:\n  ${data.server_info}`;
         } else {
@@ -1186,8 +1205,7 @@
       const consoleBox = document.getElementById('xserverConsole');
       consoleBox.innerText = '🚀 XServerへデータおよび実行コード・ログの包括バックアップを送信中...';
       try {
-        const res = await fetch('/api/xserver/sync', { method: 'POST' });
-        const data = await res.json();
+        const data = await safeFetchJson('/api/xserver/sync', { method: 'POST' });
         if (data.status === 'success') {
           consoleBox.innerText = `🎉 [同期完了]\n- ${data.message}\n- 保存先: ${data.remote_dir} @ ${data.host}`;
         } else {
@@ -1204,8 +1222,7 @@
       const consoleBox = document.getElementById('xserverConsole');
       consoleBox.innerText = '📥 XServerから最新アーカイブを取得・展開中...';
       try {
-        const res = await fetch('/api/xserver/restore', { method: 'POST' });
-        const data = await res.json();
+        const data = await safeFetchJson('/api/xserver/restore', { method: 'POST' });
         if (data.status === 'success') {
           consoleBox.innerText = `✅ [復元完了]\n${data.message}`;
           alert('復元が完了しました。ページを再読み込みします。');
@@ -1221,8 +1238,7 @@
     // 同期・保存トリガー
     async function triggerSync() {
       try {
-        const res = await fetch('/api/sync', {method: 'POST'});
-        const data = await res.json();
+        const data = await safeFetchJson('/api/sync', {method: 'POST'});
         alert('【包括的同期結果】\n- Google Drive: ' + data.google_drive.message + '\n- GitHub: ' + data.github.message + '\n- XServer: ' + data.xserver.message);
       } catch (e) {
         alert('同期エラー: ' + e.message);
