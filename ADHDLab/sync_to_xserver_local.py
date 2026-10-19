@@ -58,15 +58,28 @@ def main():
         sys.exit(1)
     print(f"✅ 接続成功！\n   {test_res.stdout.strip()}")
 
-    # 2. リモートディレクトリ作成
-    print(f"\n📁 2. リモートディレクトリ構造の準備 ({REMOTE_DIR})...")
+    # 2. Google Drive から最新データ（adhdlab.db, ソース一覧.xlsx）を自動同期
+    gdrive_dir = os.path.expanduser("~/Library/CloudStorage/GoogleDrive-zuyasi4025@gmail.com/マイドライブ/ADHDLab")
+    if os.path.exists(gdrive_dir):
+        print(f"\n📂 2. Google Drive ({gdrive_dir}) から最新データを取得...")
+        os.makedirs(DATA_DIR, exist_ok=True)
+        for fname in ["adhdlab.db", "ソース一覧.xlsx"]:
+            src = os.path.join(gdrive_dir, fname)
+            dst = os.path.join(DATA_DIR, fname)
+            if os.path.exists(src):
+                import shutil
+                shutil.copy2(src, dst)
+                print(f"   - {fname} を取得完了 ({os.path.getsize(dst):,} bytes)")
+
+    # 3. リモートディレクトリ作成
+    print(f"\n📁 3. リモートディレクトリ構造の準備 ({REMOTE_DIR})...")
     mkdir_cmd = f"{ssh_base} {USER}@{HOST} 'mkdir -p {REMOTE_DIR}/data {REMOTE_DIR}/archives {REMOTE_DIR}/logs'"
     subprocess.run(mkdir_cmd, shell=True, check=True)
     print("✅ ディレクトリ準備完了")
 
-    # 3. データ同期
+    # 4. データ同期
     if os.path.exists(DATA_DIR):
-        print(f"\n💾 3. データディレクトリ ({DATA_DIR}) の同期...")
+        print(f"\n💾 4. データディレクトリ ({DATA_DIR}) の同期...")
         rsync_cmd = [
             "rsync", "-avz", "--delete",
             "-e", f"ssh -i {KEY_PATH} -p {PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o LogLevel=ERROR",
@@ -87,11 +100,12 @@ def main():
             subprocess.run(scp_cmd, check=True)
             print("✅ データ同期成功 (scp)")
 
-    # 4. コード＆ログ包括アーカイブ作成・転送
-    print("\n📦 4. 包括的バックアップアーカイブの生成＆転送...")
+    # 5. コード＆ログ＆データ包括アーカイブ作成・転送
+    print("\n📦 5. 包括的バックアップアーカイブの生成＆転送...")
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     tar_name = f"adhdlab_archive_{timestamp}.tar.gz"
     tar_path = os.path.join("/tmp", tar_name)
+    local_latest_tar = os.path.join(PROJECT_ROOT, "adhdlab_latest.tar.gz")
 
     targets = [
         ("core", os.path.join(PROJECT_ROOT, "core")),
@@ -107,6 +121,10 @@ def main():
             if os.path.exists(target):
                 tar.add(target, arcname=arcname)
 
+    # ローカルプロジェクト直下にも最新アーカイブを保存
+    import shutil
+    shutil.copy2(tar_path, local_latest_tar)
+
     # 転送 (最新版 adhdlab_latest.tar.gz + 世代アーカイブ)
     scp_opts = f"-P {PORT} -i {KEY_PATH} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o LogLevel=ERROR"
     subprocess.run(f"scp {scp_opts} {tar_path} {USER}@{HOST}:{REMOTE_DIR}/adhdlab_latest.tar.gz", shell=True, check=True)
@@ -115,9 +133,10 @@ def main():
     if os.path.exists(tar_path):
         os.remove(tar_path)
 
-    print("✅ コード＆ログ包括アーカイブの保管完了！")
-    print(f"   - 最新版: {REMOTE_DIR}/adhdlab_latest.tar.gz")
-    print(f"   - 世代版: {REMOTE_DIR}/archives/{tar_name}")
+    print("✅ コード＆ログ＆データ包括アーカイブの保管完了！")
+    print(f"   - ローカル: {local_latest_tar} ({os.path.getsize(local_latest_tar):,} bytes)")
+    print(f"   - XServer最新版: {REMOTE_DIR}/adhdlab_latest.tar.gz")
+    print(f"   - XServer世代版: {REMOTE_DIR}/archives/{tar_name}")
 
     print("\n" + "=" * 60)
     print("🎉 XServerへのバックアップがすべて正常に完了しました！")
