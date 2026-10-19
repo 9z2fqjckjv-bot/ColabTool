@@ -160,16 +160,26 @@ for i in {1..15}; do
 done
 
 export SERVER_PIPE="$PIPE_PATH"
-export NODE_OPTIONS="--max-old-space-size=4096 --expose-gc"
-nohup node --max-old-space-size=4096 --expose-gc index.js > /content/bots.log 2>&1 &
+export NODE_OPTIONS="--max-old-space-size=4096"
+nohup node --expose-gc index.js > /content/bots.log 2>&1 &
 echo "✅ AIPlayerクラスタ & 行動モニターWebポータルをバックグラウンド起動しました (ポート: 3000)"
 
 # Webポータル (ポート3000) の起動完了を確実に待機 (502 Bad Gateway 防止)
 echo "Webポータル (ポート: 3000) のリッスン開始を待機中..."
-for i in {1..20}; do
+PORT3000_UP=false
+for i in {1..25}; do
     if nc -z 127.0.0.1 3000 2>/dev/null; then
         echo "✅ ポート 3000 が正常にリッスンされました！"
+        PORT3000_UP=true
         break
+    fi
+    # もしnodeがクラッシュしていたらログを表示
+    if ! pgrep -f "node --expose-gc index.js" >/dev/null 2>&1 && ! pgrep -f "node index.js" >/dev/null 2>&1; then
+        echo "⚠️ Node.js プロセスが予期せず終了しました。直近ログ:"
+        tail -n 15 /content/bots.log 2>/dev/null || true
+        echo "再起動を試行します (フォールバック)..."
+        nohup node index.js > /content/bots.log 2>&1 &
+        sleep 2
     fi
     sleep 1
     echo -n "."
