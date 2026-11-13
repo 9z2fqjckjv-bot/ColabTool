@@ -200,6 +200,68 @@ Configure an automatic multi-tier GCS lifecycle policy to reduce storage costs o
 
 Apply this policy to your GCS backup bucket:
 
+To support continuous, 24/7/365 multi-agent operation (totaling 730 hours/month or 8,760 hours/year), the following is a granular budget comparison between us-central1 (Iowa - lowest GPU cost) and asia-northeast1 (Tokyo - lowest latency for JP spectators).
+
+The exchange rate used is 1 USD = 150 JPY.
+
+Option 1: Self-Hosted Qwen2.5-72B-Instruct (Quantized FP8)
+Inference Stack: vLLM running on 4x NVIDIA L4 GPUs on a g2-standard-48 instance utilizing a 1-Year Committed Use Discount (CUD). This is the optimal cost-performance sweet spot.
+
+Cost Item	Monthly Cost (USD)	Monthly Cost (JPY)	Annual Cost (USD)	Annual Cost (JPY)
+Minecraft Server (c3-standard-8 1-Yr CUD)	$153.30	¥22,995	$1,839.60	¥275,940
+Bot Swarm Compute (c3-standard-32 1-Yr CUD)	$613.93	¥92,090	$7,367.16	¥1,105,074
+GPU Inference Host (g2-standard-48 1-Yr CUD)	$1,576.80	¥236,520	$18,921.60	¥2,838,240
+Database & Caching (Postgres + Memorystore)	$225.00	¥33,750	$2,700.00	¥405,000
+Persistent Storage & GCS Backup Archives	$65.00	¥9,750	$780.00	¥117,000
+Network Egress & Cloud Load Balancing	$100.00	¥15,000	$1,200.00	¥180,000
+Total (us-central1 - Iowa)	$2,734.03	¥410,105	$32,808.36	¥4,921,254
+Total (asia-northeast1 - Tokyo) [~22% markup]	$3,335.52	¥500,328	$40,026.24	¥6,003,936
+Option 2: Self-Hosted Qwen2.5-72B-Instruct (Full Precision BF16)
+Inference Stack: vLLM running unquantized weights on 2x NVIDIA A100 80GB GPUs on an a2-ultragpu-2g instance with a 1-Year Committed Use Discount (CUD). This provides maximum reasoning fidelity under heavy simultaneous load.
+
+Cost Item	Monthly Cost (USD)	Monthly Cost (JPY)	Annual Cost (USD)	Annual Cost (JPY)
+Minecraft Server (c3-standard-8 1-Yr CUD)	$153.30	¥22,995	$1,839.60	¥275,940
+Bot Swarm Compute (c3-standard-32 1-Yr CUD)	$613.93	¥92,090	$7,367.16	¥1,105,074
+GPU Inference Host (a2-ultragpu-2g 1-Yr CUD)	$4,657.40	¥698,610	$55,888.80	¥8,383,320
+Database & Caching (Postgres + Memorystore)	$225.00	¥33,750	$2,700.00	¥405,000
+Persistent Storage & GCS Backup Archives	$65.00	¥9,750	$780.00	¥117,000
+Network Egress & Cloud Load Balancing	$100.00	¥15,000	$1,200.00	¥180,000
+Total (us-central1 - Iowa)	$5,814.63	¥872,195	$69,775.56	¥10,466,334
+Total (asia-northeast1 - Tokyo) [~25% markup]	$7,268.29	¥1,090,244	$87,219.48	¥13,082,922
+Option 3: Hybrid GCP Compute + External Qwen-Max API
+Inference Stack: No self-hosted GPUs on GCP. The Minecraft Server and Bot Swarms run on GCE/GKE, sending secure external API requests directly to Alibaba Cloud DashScope / Model Studio APIs over HTTPS.
+
+API Token Mathematical Formulation
+Active Bots ($B$): $50$
+Average Calls per Minute ($M$): $2$ (one tick every 30 seconds per bot)
+Total Minutes per Year ($Y$): $525,600$
+Total Requests per Year: $50 \times 2 \times 525,600 = 52,560,000 \text{ requests}$ ($4,380,000 \text{ requests/month}$)
+Context Structure (with Prefix Caching):
+Uncached Input: 240 tokens per call (dynamic environment state changes).
+Cached Input: 960 tokens per call (system prompts, roles, agent history).
+Output Output: 150 tokens per call (cognitive actions).
+Average API Pricing Rates:
+Cached Input: $0.001 per 1,000 tokens.
+Uncached Input: $0.005 per 1,000 tokens.
+Output: $0.020 per 1,000 tokens.
+$$\text{Cost per Call} = (0.24 \times $0.005) + (0.96 \times $0.001) + (0.15 \times $0.020) = $0.00516$$
+
+$$\text{Monthly API Cost} = 4,380,000 \times $0.00516 = $22,600.80$$
+
+Cost Item	Monthly Cost (USD)	Monthly Cost (JPY)	Annual Cost (USD)	Annual Cost (JPY)
+Minecraft Server (c3-standard-8 1-Yr CUD)	$153.30	¥22,995	$1,839.60	¥275,940
+Bot Swarm Compute (c3-standard-32 1-Yr CUD)	$613.93	¥92,090	$7,367.16	¥1,105,074
+Qwen-Max Token API Consumption	$22,600.80	¥3,390,120	$271,209.60	¥40,681,440
+Database & Caching (Postgres + Memorystore)	$225.00	¥33,750	$2,700.00	¥405,000
+Persistent Storage & GCS Backup Archives	$65.00	¥9,750	$780.00	¥117,000
+Network Egress & Cloud Load Balancing	$100.00	¥15,000	$1,200.00	¥180,000
+Total (us-central1 - Iowa)	$23,758.03	¥3,563,705	$285,096.36	¥42,764,454
+Total (asia-northeast1 - Tokyo)	$23,944.33	¥3,591,650	$287,331.96	¥43,099,794
+Critical Financial Recommendations
+Self-Hosted GPUs are much cheaper: Running a 24/7 autonomous bot swarm with heavy cognitive schedules makes Option 1 (Self-Hosted Quantized FP8) the clear choice. It is roughly 8.7x cheaper than pay-as-you-go API calls due to high continuous token volume.
+Standard Instance & CUD vs. Spot VMs: Do not run the core infrastructure on Spot VMs. The Minecraft server, database, and bot nodes are stateful. Spot preemption during active simulation events can lead to chunk corruption and agent state de-synchronization. A 1-Year CUD provides stable, uninterrupted compute with deep, predictable discounts.
+Would you like me to generate the exact Terraform templates or GCloud deployment commands to spin up this infrastructure in your tohostudio project?
+
 gcloud storage buckets create gs://aiminecraft-backups-tohostudio --location=us-central1
 生成されたコードには、ここに示されていないライセンス制限が適用される場合があります。コードを使用する際は十分にご注意ください。詳細 
 
